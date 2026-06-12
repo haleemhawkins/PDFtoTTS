@@ -1,0 +1,6 @@
+# Runtime deps. torch (ROCm) comes from the base image (rocm/pytorch).
+grpcio>=1.68
+grpcio-tools>=1.68
+numpy>=1.26
+soundfile>=0.12
+whisperx>=3.1

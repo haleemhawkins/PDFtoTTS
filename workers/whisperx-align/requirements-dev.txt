@@ -1,0 +1,4 @@
+# Deps needed to run the unit tests (no GPU / torch / whisperx required).
+grpcio>=1.68
+grpcio-tools>=1.68
+pytest>=8.0

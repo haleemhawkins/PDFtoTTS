@@ -1,0 +1,8 @@
+# Runtime deps. onnxruntime-rocm is installed separately in the Dockerfile from
+# AMD's wheel index (it is not on PyPI); CPU onnxruntime is the fallback.
+grpcio>=1.68
+grpcio-tools>=1.68
+numpy>=1.26
+soundfile>=0.12
+kokoro-onnx>=0.4
+misaki[en]>=0.8
