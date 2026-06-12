@@ -11,16 +11,19 @@ WORKDIR /app
 
 COPY workers/kokoro-tts/requirements.txt .
 RUN pip3 install --no-cache-dir -r requirements.txt
-# ROCm build of ONNX Runtime (falls back to CPU onnxruntime if the wheel index
-# is unavailable; runtime provider selection then picks CPU). Pin per ROCm rev.
-RUN pip3 install --no-cache-dir onnxruntime-rocm \
-      -f https://repo.radeon.com/rocm/manylinux/rocm-rel-6.2/ \
-    || pip3 install --no-cache-dir onnxruntime
+# CPU onnxruntime. We deliberately do NOT use onnxruntime-rocm: AMD's prebuilt
+# ROCm wheel has no kernels for this RDNA3 GPU (gfx1101, even spoofed to gfx1100),
+# so the ROCm provider loads but crashes at inference with hipErrorNoBinaryForGpu.
+# Kokoro on CPU runs ~3x faster than realtime, which is ample for streaming; the
+# GPU is used where it works (WhisperX alignment via torch-rocm). kokoro-onnx
+# already pulls onnxruntime as a dep above; install it explicitly to be safe.
+RUN pip3 install --no-cache-dir onnxruntime
 
 # Contracts + source, then generate the gRPC stubs into /app/generated.
 COPY proto/ /proto/
 COPY workers/kokoro-tts/ /app/
-RUN python3 -m grpc_tools.protoc -I /proto \
+RUN mkdir -p /app/generated \
+ && python3 -m grpc_tools.protoc -I /proto \
       --python_out=/app/generated --grpc_python_out=/app/generated \
       common.proto kokoro.proto
 

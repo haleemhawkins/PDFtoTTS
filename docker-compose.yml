@@ -6,9 +6,12 @@ x-rocm: &rocm
   devices:
     - /dev/kfd
     - /dev/dri
+  # Numeric host GIDs (video=985, render=989) rather than names: the rocm/pytorch
+  # base image lacks a "render" group by name, which breaks group_add. GIDs are
+  # what the kernel checks for /dev/kfd + /dev/dri access regardless.
   group_add:
-    - video
-    - render
+    - "985"
+    - "989"
   security_opt:
     - seccomp:unconfined
   ipc: host
@@ -73,7 +76,10 @@ services:
       WHISPERX_GRPC: "http://whisperx-align:50052"
       DATA_DIR: "/data"
       PIPELINE_CONCURRENCY: "2"
-      MAX_TOKENS_PER_CHUNK: "350"
+      # Smaller chunks -> first audio is ready in seconds (not ~45s for one giant
+      # 350-token chunk) and progress advances visibly per chunk. ~120 tokens is
+      # roughly a few sentences.
+      MAX_TOKENS_PER_CHUNK: "120"
     ports:
       - "8080:8080"
     volumes:

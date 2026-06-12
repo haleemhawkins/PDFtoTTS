@@ -5,12 +5,19 @@ FROM rocm/pytorch:latest AS base
 
 WORKDIR /app
 
+# whisperx.load_audio() shells out to the ffmpeg binary to decode audio before
+# alignment; without it the worker fails with "[Errno 2] ... 'ffmpeg'".
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends ffmpeg \
+ && rm -rf /var/lib/apt/lists/*
+
 COPY workers/whisperx-align/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY proto/ /proto/
 COPY workers/whisperx-align/ /app/
-RUN python -m grpc_tools.protoc -I /proto \
+RUN mkdir -p /app/generated \
+ && python -m grpc_tools.protoc -I /proto \
       --python_out=/app/generated --grpc_python_out=/app/generated \
       common.proto alignment.proto
 
