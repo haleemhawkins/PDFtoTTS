@@ -1,12 +1,14 @@
-"""Synthesis backend abstraction + the real Kokoro ONNX implementation.
+"""Synthesis backend abstraction + the real Kokoro implementation.
 
 The gRPC layer depends only on the SynthBackend protocol, so it can be tested
-with a fake. The real backend lazily imports kokoro_onnx so importing this
-module (and running the unit tests) never requires onnxruntime.
+with a fake. The real backend uses the PyTorch `kokoro` package (KPipeline) so it
+runs on the GPU via torch-rocm; heavy imports (torch/kokoro) are deferred to
+load()/synthesize() so importing this module for the unit tests stays light.
 """
 from __future__ import annotations
 
 import logging
+import os
 import re
 from dataclasses import dataclass, field
 from typing import Iterator, Protocol, runtime_checkable
@@ -82,30 +84,12 @@ class SynthBackend(Protocol):
     def synthesize(self, text: str, voice_id: str, speed: float, language: str) -> Synthesis: ...
 
 
-# Kokoro's per-voice style array has STYLE_ROWS rows; _create_audio selects the
-# style with voice[len(tokens)], so a token count equal to the row count indexes
-# out of bounds. We cap below it.
-STYLE_ROWS = 510
-
-
-def cap_phoneme_length(kokoro_onnx_module, cap: int = STYLE_ROWS - 1) -> int:
-    """Cap ``kokoro_onnx.MAX_PHONEME_LENGTH`` so a phoneme batch can never index
-    the voice style array out of bounds.
-
-    kokoro_onnx 0.5.0 has an off-by-one: ``_create_audio`` truncates a batch to
-    ``MAX_PHONEME_LENGTH`` (510) then does ``voice[len(tokens)]`` on the 510-row
-    style array (valid indices 0..509). A batch that tokenizes to exactly 510
-    hits ``voice[510]`` -> "index 510 is out of bounds for axis 0 with size 510".
-    Capping at 509 keeps both the internal batch-split and the truncation in range.
-
-    Returns the effective ``MAX_PHONEME_LENGTH`` after capping.
-    """
-    if kokoro_onnx_module.MAX_PHONEME_LENGTH > cap:
-        kokoro_onnx_module.MAX_PHONEME_LENGTH = cap
-    return kokoro_onnx_module.MAX_PHONEME_LENGTH
-
-
 # --- Real Kokoro backend (not exercised by unit tests) --------------------
+
+_HF_REPO = "hexgrad/Kokoro-82M"
+_CORE_VOICES = ["af_heart", "af_bella", "af_nicole", "am_adam", "am_michael",
+                "bf_emma", "bm_george"]
+
 
 def _region_gender(voice_id: str) -> tuple[str, str]:
     # Kokoro voice ids like "af_heart": region letter + gender letter.
@@ -117,45 +101,66 @@ def _region_gender(voice_id: str) -> tuple[str, str]:
     return lang, sex
 
 
-class KokoroBackend:
-    """Wraps kokoro_onnx. Construct via :meth:`load`."""
+def _fetch_voice_ids() -> list[str]:
+    """List the available Kokoro voices from the model repo (falls back to a
+    core set if the listing isn't reachable)."""
+    try:
+        from huggingface_hub import HfApi
 
-    def __init__(self, kokoro, provider: str, sample_rate: int = 24000):
-        self._kokoro = kokoro
-        self._provider = provider
+        ids = sorted(
+            os.path.basename(f)[:-3]
+            for f in HfApi().list_repo_files(_HF_REPO)
+            if f.startswith("voices/") and f.endswith(".pt")
+        )
+        if ids:
+            return ids
+    except Exception:  # noqa: BLE001
+        logger.warning("could not list Kokoro voices from HF; using core set")
+    return _CORE_VOICES
+
+
+class KokoroBackend:
+    """Kokoro TTS via the PyTorch `kokoro` package (KPipeline). Construct via
+    :meth:`load`. A KPipeline is created per language code (the voice's first
+    letter) and cached; all run on the selected torch device."""
+
+    def __init__(self, kpipeline_cls, device: str, voice_ids, sample_rate: int = 24000):
+        self._KPipeline = kpipeline_cls
+        self._device = device
         self._sample_rate = sample_rate
-        self._voices = {v: VoiceInfo(v, v, *_region_gender(v)) for v in kokoro.get_voices()}
+        self._pipelines: dict[str, object] = {}
+        self._voices = {v: VoiceInfo(v, v, *_region_gender(v)) for v in voice_ids}
 
     @classmethod
-    def load(cls, model_path: str, voices_path: str, provider_priority=None,
-             intra_op_threads: int = 0):
-        """Load the ONNX model, selecting the best execution provider.
+    def load(cls):
+        """Build the backend on the GPU (torch-rocm) when available, else CPU, and
+        warm the common pipeline so the first request doesn't pay kernel JIT."""
+        import torch
+        from kokoro import KPipeline
 
-        intra_op_threads caps the threads per inference so parallel syntheses
-        partition the CPU instead of oversubscribing it (0 = onnxruntime default).
-        """
-        import onnxruntime as ort
-        import kokoro_onnx
-        from kokoro_onnx import Kokoro
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+        backend = cls(KPipeline, device, _fetch_voice_ids())
 
-        from .providers import create_session
+        # Warm up American English (the default) — the first GPU inference compiles
+        # MIOpen kernels (tens of seconds on ROCm); do it before serving.
+        try:
+            list(backend._pipeline_for("af_heart")("Warm up the synthesis kernels.",
+                                                    voice="af_heart"))
+        except Exception as exc:  # noqa: BLE001 — warmup is best-effort
+            logger.warning("warmup synthesis failed: %s", exc)
+        logger.info("kokoro backend ready on %s with %d voices",
+                    device, len(backend._voices))
+        return backend
 
-        cap_phoneme_length(kokoro_onnx)
-
-        def factory(providers):
-            so = ort.SessionOptions()
-            so.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
-            if intra_op_threads > 0:
-                so.intra_op_num_threads = intra_op_threads
-            return ort.InferenceSession(model_path, sess_options=so, providers=providers)
-
-        session, provider = create_session(ort.get_available_providers(), factory, provider_priority)
-        kokoro = Kokoro.from_session(session, voices_path)
-        return cls(kokoro, provider)
+    def _pipeline_for(self, voice_id: str):
+        code = (voice_id[:1] or "a")
+        if code not in self._pipelines:
+            self._pipelines[code] = self._KPipeline(lang_code=code, device=self._device)
+        return self._pipelines[code]
 
     @property
     def provider(self) -> str:
-        return self._provider
+        return self._device
 
     def list_voices(self) -> list[VoiceInfo]:
         return list(self._voices.values())
@@ -164,12 +169,8 @@ class KokoroBackend:
         return voice_id in self._voices
 
     def synthesize(self, text: str, voice_id: str, speed: float, language: str) -> Synthesis:
-        # Kokoro expects locale codes (e.g. "en-us"); fall back to the voice's
-        # language for generic 2-letter codes like "en".
-        lang = language if language and "-" in language else self._voices[voice_id].language
-
         # Fast path: synthesize the whole chunk.
-        whole = self._try_create(text, voice_id, speed, lang)
+        whole = self._try_create(text, voice_id, speed)
         if whole is not None:
             return Synthesis(whole, self._sample_rate, [])
 
@@ -179,7 +180,7 @@ class KokoroBackend:
         # whole chunk — the document keeps reading.
         parts: list[np.ndarray] = []
         for sentence in _split_sentences(text):
-            audio = self._try_create(sentence, voice_id, speed, lang)
+            audio = self._try_create(sentence, voice_id, speed)
             if audio is None:
                 words = max(1, len(sentence.split()))
                 seconds = min(words * 0.4, 8.0)
@@ -191,15 +192,22 @@ class KokoroBackend:
         merged = np.concatenate(parts) if parts else np.zeros(0, dtype=np.float32)
         return Synthesis(merged, self._sample_rate, [])
 
-    def _try_create(self, text: str, voice_id: str, speed: float, lang: str):
+    def _try_create(self, text: str, voice_id: str, speed: float):
         """Synthesize `text`, trying progressively safer renderings. Returns the
-        float32 samples, or None if every variant failed to phonemize."""
+        float32 samples (concatenated across KPipeline segments), or None if every
+        variant failed to phonemize."""
+        import torch
+
+        pipeline = self._pipeline_for(voice_id)
         for cleaned in synthesis_variants(text):
             if not cleaned:
                 continue
             try:
-                samples, _ = self._kokoro.create(cleaned, voice=voice_id, speed=speed, lang=lang)
-                return np.asarray(samples, dtype=np.float32)
+                audios = [r.audio for r in pipeline(cleaned, voice=voice_id, speed=speed)
+                          if r.audio is not None and len(r.audio) > 0]
+                if not audios:
+                    continue
+                return torch.cat(audios).detach().to("cpu").numpy().astype(np.float32)
             except Exception:  # noqa: BLE001 — fall back to a safer rendering
                 continue
         return None

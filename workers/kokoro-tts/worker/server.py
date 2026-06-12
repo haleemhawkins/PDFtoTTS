@@ -87,29 +87,21 @@ def serve() -> None:
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
 
-    from .tuning import cpu_cores, resolve_concurrency, resolve_intra_threads
-
     port = os.environ.get("GRPC_PORT", "50051")
     data_dir = os.environ.get("DATA_DIR", "/data")
-    model_dir = os.environ.get("MODEL_DIR", "/models/kokoro")
-    # Parallelism adapts to the host's cores unless overridden by env.
-    max_concurrency = resolve_concurrency()
-    intra_threads = resolve_intra_threads()
-    logger.info("cpu cores=%d -> synth concurrency=%d, intra-op threads=%s",
-                cpu_cores(), max_concurrency, intra_threads or "default")
+    # GPU synthesis is fast and a single KPipeline/model isn't shared concurrently,
+    # so serialize by default (override with MAX_CONCURRENCY, e.g. for CPU/multi-GPU).
+    max_concurrency = int(os.environ.get("MAX_CONCURRENCY") or 1)
 
     health = HealthState()
     server = grpc.server(futures.ThreadPoolExecutor(max_workers=max_concurrency + 2))
     server.add_insecure_port(f"[::]:{port}")
 
-    # Load the model, then start serving and mark healthy.
+    # Load the model (kokoro pulls weights from HF on first use), warm the GPU
+    # kernels, then start serving and mark healthy.
     from .backend import KokoroBackend
 
-    backend = KokoroBackend.load(
-        os.path.join(model_dir, "kokoro-v1.0.onnx"),
-        os.path.join(model_dir, "voices-v1.0.bin"),
-        intra_op_threads=intra_threads,
-    )
+    backend = KokoroBackend.load()
     kokoro_pb2_grpc.add_KokoroTtsServicer_to_server(
         KokoroServicer(backend, data_dir, max_concurrency, health), server)
 

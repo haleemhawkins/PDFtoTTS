@@ -1,45 +1,45 @@
-# Kokoro TTS worker. Build context = repo root (needs /proto):
+# Kokoro TTS worker (PyTorch on the GPU via torch-rocm). Build context = repo root:
 #   docker build -f workers/kokoro-tts/Dockerfile -t kokoro-tts .
-FROM rocm/dev-ubuntu-22.04:6.2 AS base
+# Same ROCm/torch base as the aligner; torch sees the AMD GPU as "cuda".
+FROM rocm/pytorch:latest AS base
 
 ENV DEBIAN_FRONTEND=noninteractive
+# espeak-ng backs misaki's phonemizer fallback.
 RUN apt-get update \
- && apt-get install -y --no-install-recommends python3 python3-pip espeak-ng curl \
+ && apt-get install -y --no-install-recommends espeak-ng \
  && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
 COPY workers/kokoro-tts/requirements.txt .
-RUN pip3 install --no-cache-dir -r requirements.txt
-# CPU onnxruntime. We deliberately do NOT use onnxruntime-rocm: AMD's prebuilt
-# ROCm wheel has no kernels for this RDNA3 GPU (gfx1101, even spoofed to gfx1100),
-# so the ROCm provider loads but crashes at inference with hipErrorNoBinaryForGpu.
-# Kokoro on CPU runs ~3x faster than realtime, which is ample for streaming; the
-# GPU is used where it works (WhisperX alignment via torch-rocm). kokoro-onnx
-# already pulls onnxruntime as a dep above; install it explicitly to be safe.
-RUN pip3 install --no-cache-dir onnxruntime
+RUN pip install --no-cache-dir -r requirements.txt
 
 # Contracts + source, then generate the gRPC stubs into /app/generated.
 COPY proto/ /proto/
 COPY workers/kokoro-tts/ /app/
 RUN mkdir -p /app/generated \
- && python3 -m grpc_tools.protoc -I /proto \
+ && python -m grpc_tools.protoc -I /proto \
       --python_out=/app/generated --grpc_python_out=/app/generated \
       common.proto kokoro.proto
 
 ENV PYTHONPATH=/app:/app/generated \
     GRPC_PORT=50051 \
     DATA_DIR=/data \
-    MODEL_DIR=/models/kokoro \
-    HSA_OVERRIDE_GFX_VERSION=11.0.0
-# MAX_CONCURRENCY / ONNX_INTRA_OP_THREADS are intentionally NOT set here so the
-# worker auto-derives parallelism from the host's cores (see worker/tuning.py).
-# Override via the environment per-deployment if needed.
+    HSA_OVERRIDE_GFX_VERSION=11.0.0 \
+    HF_HOME=/models/hf \
+    MIOPEN_USER_DB_PATH=/models/miopen \
+    MIOPEN_CUSTOM_CACHE_DIR=/models/miopen \
+    # Heuristic kernel selection: chunks vary in length, and MIOpen's default
+    # NORMAL mode runs an expensive per-shape tuning search the first time it sees
+    # each length (tens of seconds), so synthesis was slower than CPU. FAST picks
+    # a good kernel immediately. The MIOpen cache above still persists compiled ones.
+    MIOPEN_FIND_MODE=FAST
 
 RUN chmod +x /app/entrypoint.sh
 
-HEALTHCHECK --interval=10s --timeout=5s --retries=12 --start-period=120s \
+# Generous start period: first boot downloads the model and JIT-compiles GPU
+# (MIOpen) kernels during warmup; the MIOpen cache volume makes later boots fast.
+HEALTHCHECK --interval=10s --timeout=5s --retries=24 --start-period=300s \
   CMD python3 -m worker.healthcheck || exit 1
 
-# Downloads the model on first run (into the modelcache volume), then serves.
 CMD ["/app/entrypoint.sh"]

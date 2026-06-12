@@ -1,8 +1,8 @@
-# Runtime deps. onnxruntime-rocm is installed separately in the Dockerfile from
-# AMD's wheel index (it is not on PyPI); CPU onnxruntime is the fallback.
+# Runtime deps. torch (ROCm) comes from the base image (rocm/pytorch); the
+# PyTorch `kokoro` package runs synthesis on the GPU. numpy pinned <2 to match the
+# NumPy-1.x-compiled base torch (misaki/huggingface-hub come in via kokoro).
 grpcio>=1.68
 grpcio-tools>=1.68
-numpy>=1.26
+numpy>=1.26,<2
 soundfile>=0.12
-kokoro-onnx>=0.4
-misaki[en]>=0.8
+kokoro>=0.9

@@ -27,10 +27,9 @@ services:
       HIP_VISIBLE_DEVICES: "0"
       GRPC_PORT: "50051"
       DATA_DIR: "/data"
-      MODEL_DIR: "/models/kokoro"
-      # Parallel CPU synthesis adapts to the host: MAX_CONCURRENCY and
-      # ONNX_INTRA_OP_THREADS auto-derive from the available cores (~cores/3 slots,
-      # cores/slots threads each). Set them here to override on a specific machine.
+      # GPU synthesis is fast; the worker serializes by default. Set MAX_CONCURRENCY
+      # to override (e.g. CPU fallback or multi-GPU). HF model + MIOpen kernel
+      # caches live on the modelcache volume (HF_HOME/MIOPEN_* set in the Dockerfile).
     volumes:
       - appdata:/data
       - modelcache:/models
@@ -38,8 +37,8 @@ services:
       test: ["CMD", "python3", "-m", "worker.healthcheck"]
       interval: 10s
       timeout: 5s
-      retries: 12
-      start_period: 120s
+      retries: 24
+      start_period: 300s
     restart: unless-stopped
 
   whisperx-align:
