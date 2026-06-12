@@ -87,10 +87,16 @@ def serve() -> None:
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
 
+    from .tuning import cpu_cores, resolve_concurrency, resolve_intra_threads
+
     port = os.environ.get("GRPC_PORT", "50051")
     data_dir = os.environ.get("DATA_DIR", "/data")
-    max_concurrency = int(os.environ.get("MAX_CONCURRENCY", "1"))
     model_dir = os.environ.get("MODEL_DIR", "/models/kokoro")
+    # Parallelism adapts to the host's cores unless overridden by env.
+    max_concurrency = resolve_concurrency()
+    intra_threads = resolve_intra_threads()
+    logger.info("cpu cores=%d -> synth concurrency=%d, intra-op threads=%s",
+                cpu_cores(), max_concurrency, intra_threads or "default")
 
     health = HealthState()
     server = grpc.server(futures.ThreadPoolExecutor(max_workers=max_concurrency + 2))
@@ -102,6 +108,7 @@ def serve() -> None:
     backend = KokoroBackend.load(
         os.path.join(model_dir, "kokoro-v1.0.onnx"),
         os.path.join(model_dir, "voices-v1.0.bin"),
+        intra_op_threads=intra_threads,
     )
     kokoro_pb2_grpc.add_KokoroTtsServicer_to_server(
         KokoroServicer(backend, data_dir, max_concurrency, health), server)

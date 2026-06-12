@@ -88,8 +88,13 @@ class KokoroBackend:
         self._voices = {v: VoiceInfo(v, v, *_region_gender(v)) for v in kokoro.get_voices()}
 
     @classmethod
-    def load(cls, model_path: str, voices_path: str, provider_priority=None):
-        """Load the ONNX model, selecting the best execution provider."""
+    def load(cls, model_path: str, voices_path: str, provider_priority=None,
+             intra_op_threads: int = 0):
+        """Load the ONNX model, selecting the best execution provider.
+
+        intra_op_threads caps the threads per inference so parallel syntheses
+        partition the CPU instead of oversubscribing it (0 = onnxruntime default).
+        """
         import onnxruntime as ort
         import kokoro_onnx
         from kokoro_onnx import Kokoro
@@ -99,7 +104,11 @@ class KokoroBackend:
         cap_phoneme_length(kokoro_onnx)
 
         def factory(providers):
-            return ort.InferenceSession(model_path, providers=providers)
+            so = ort.SessionOptions()
+            so.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
+            if intra_op_threads > 0:
+                so.intra_op_num_threads = intra_op_threads
+            return ort.InferenceSession(model_path, sess_options=so, providers=providers)
 
         session, provider = create_session(ort.get_available_providers(), factory, provider_priority)
         kokoro = Kokoro.from_session(session, voices_path)

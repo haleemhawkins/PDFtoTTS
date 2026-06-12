@@ -49,7 +49,11 @@ public sealed class SessionPipeline
         // A small first chunk so audio starts in a few seconds instead of waiting
         // for a full-size chunk to synthesize + align.
         _firstChunkTokens = config.GetValue("FIRST_CHUNK_TOKENS", _maxTokensPerChunk);
-        _concurrency = config.GetValue("PIPELINE_CONCURRENCY", 2);
+        // Match Kokoro's parallel synth slots (same host): ~cores/3 unless the
+        // env overrides it. The orchestrator runs the first chunk alone for fast
+        // time-to-first-audio, then opens up to this many in parallel.
+        _concurrency = config.GetValue<int?>("PIPELINE_CONCURRENCY")
+            ?? Math.Clamp(Environment.ProcessorCount / 3, 1, 8);
     }
 
     public void Start(Guid sessionId) =>

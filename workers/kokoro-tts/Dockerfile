@@ -31,8 +31,10 @@ ENV PYTHONPATH=/app:/app/generated \
     GRPC_PORT=50051 \
     DATA_DIR=/data \
     MODEL_DIR=/models/kokoro \
-    MAX_CONCURRENCY=1 \
     HSA_OVERRIDE_GFX_VERSION=11.0.0
+# MAX_CONCURRENCY / ONNX_INTRA_OP_THREADS are intentionally NOT set here so the
+# worker auto-derives parallelism from the host's cores (see worker/tuning.py).
+# Override via the environment per-deployment if needed.
 
 RUN chmod +x /app/entrypoint.sh
 

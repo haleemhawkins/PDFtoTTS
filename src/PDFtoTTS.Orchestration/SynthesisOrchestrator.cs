@@ -40,8 +40,10 @@ public sealed class SynthesisOrchestrator
         var inflight = new Queue<Task<ProcessedChunk>>();
         int next = 0;
 
-        // Prime the window.
-        while (next < chunks.Count && inflight.Count < window)
+        // Start the FIRST chunk alone so it gets the whole worker and audio starts
+        // ASAP (the first chunk is intentionally small); widen to the full window
+        // afterwards so the remaining chunks synthesize in parallel.
+        if (next < chunks.Count)
             inflight.Enqueue(ProcessAsync(chunks[next++], sourceWords, options, outPath, audioUrl, ct));
 
         while (inflight.Count > 0)
@@ -50,8 +52,9 @@ public sealed class SynthesisOrchestrator
             var result = await inflight.Dequeue().ConfigureAwait(false);
             yield return result;
 
-            // Start the next chunk only after one is consumed (backpressure).
-            if (next < chunks.Count)
+            // Refill up to the concurrency window (after the first chunk this opens
+            // the pipeline to parallel synthesis; backpressure caps it at `window`).
+            while (next < chunks.Count && inflight.Count < window)
                 inflight.Enqueue(ProcessAsync(chunks[next++], sourceWords, options, outPath, audioUrl, ct));
         }
     }

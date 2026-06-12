@@ -28,7 +28,9 @@ services:
       GRPC_PORT: "50051"
       DATA_DIR: "/data"
       MODEL_DIR: "/models/kokoro"
-      MAX_CONCURRENCY: "1"
+      # Parallel CPU synthesis adapts to the host: MAX_CONCURRENCY and
+      # ONNX_INTRA_OP_THREADS auto-derive from the available cores (~cores/3 slots,
+      # cores/slots threads each). Set them here to override on a specific machine.
     volumes:
       - appdata:/data
       - modelcache:/models
@@ -75,12 +77,9 @@ services:
       KOKORO_GRPC: "http://kokoro-tts:50051"
       WHISPERX_GRPC: "http://whisperx-align:50052"
       DATA_DIR: "/data"
-      # Process chunks strictly in order. Kokoro is single-slot (MAX_CONCURRENCY=1),
-      # so concurrency>1 just makes the tiny first chunk race the large second one
-      # for the one synth slot, delaying time-to-first-audio. In-order keeps the
-      # small first chunk first; synth+align stays faster than realtime so later
-      # chunks still buffer ahead of playback.
-      PIPELINE_CONCURRENCY: "1"
+      # Pipeline concurrency auto-derives from the host's cores (~cores/3) to match
+      # Kokoro's parallel synth slots; the orchestrator runs the first chunk alone
+      # for fast first-audio, then opens up. Set PIPELINE_CONCURRENCY to override.
       # Smaller chunks -> first audio is ready in seconds (not ~45s for one giant
       # 350-token chunk) and progress advances visibly per chunk. ~120 tokens is
       # roughly a few sentences.
