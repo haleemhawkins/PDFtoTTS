@@ -43,6 +43,29 @@ class SynthBackend(Protocol):
     def synthesize(self, text: str, voice_id: str, speed: float, language: str) -> Synthesis: ...
 
 
+# Kokoro's per-voice style array has STYLE_ROWS rows; _create_audio selects the
+# style with voice[len(tokens)], so a token count equal to the row count indexes
+# out of bounds. We cap below it.
+STYLE_ROWS = 510
+
+
+def cap_phoneme_length(kokoro_onnx_module, cap: int = STYLE_ROWS - 1) -> int:
+    """Cap ``kokoro_onnx.MAX_PHONEME_LENGTH`` so a phoneme batch can never index
+    the voice style array out of bounds.
+
+    kokoro_onnx 0.5.0 has an off-by-one: ``_create_audio`` truncates a batch to
+    ``MAX_PHONEME_LENGTH`` (510) then does ``voice[len(tokens)]`` on the 510-row
+    style array (valid indices 0..509). A batch that tokenizes to exactly 510
+    hits ``voice[510]`` -> "index 510 is out of bounds for axis 0 with size 510".
+    Capping at 509 keeps both the internal batch-split and the truncation in range.
+
+    Returns the effective ``MAX_PHONEME_LENGTH`` after capping.
+    """
+    if kokoro_onnx_module.MAX_PHONEME_LENGTH > cap:
+        kokoro_onnx_module.MAX_PHONEME_LENGTH = cap
+    return kokoro_onnx_module.MAX_PHONEME_LENGTH
+
+
 # --- Real Kokoro backend (not exercised by unit tests) --------------------
 
 def _region_gender(voice_id: str) -> tuple[str, str]:
@@ -68,9 +91,12 @@ class KokoroBackend:
     def load(cls, model_path: str, voices_path: str, provider_priority=None):
         """Load the ONNX model, selecting the best execution provider."""
         import onnxruntime as ort
+        import kokoro_onnx
         from kokoro_onnx import Kokoro
 
         from .providers import create_session
+
+        cap_phoneme_length(kokoro_onnx)
 
         def factory(providers):
             return ort.InferenceSession(model_path, providers=providers)
