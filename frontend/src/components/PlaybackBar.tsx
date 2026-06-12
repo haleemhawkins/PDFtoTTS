@@ -13,7 +13,16 @@ const SPEEDS = [0.75, 1, 1.25, 1.5, 2];
 
 export function PlaybackBar({ state, progress, speed, onPlay, onPause, onSpeed }: Props) {
   const isPlaying = state === "playing";
+  const isProcessing = state === "processing";
   const canPlay = state !== "idle" && state !== "uploading" && state !== "error";
+  const pct = Math.round(progress * 100);
+
+  // While processing, the player is waiting for the audio at the current position
+  // to finish synthesizing; it auto-starts when ready. Make that legible instead
+  // of looking like nothing happened.
+  const label = isProcessing
+    ? `Synthesizing… ${pct}% — playback starts automatically`
+    : `${pct}% synthesized`;
 
   return (
     <div className="playback-bar">
@@ -32,11 +41,13 @@ export function PlaybackBar({ state, progress, speed, onPlay, onPause, onSpeed }
         </select>
       </label>
 
-      <div className="progress" title={`${Math.round(progress * 100)}% processed`}>
-        <div className="progress-fill" style={{ width: `${Math.round(progress * 100)}%` }} />
+      <div className={"progress" + (isProcessing ? " processing" : "")} title={label}>
+        <div className="progress-fill" style={{ width: `${pct}%` }} />
       </div>
 
-      <span className="state-chip">{state}</span>
+      <span className="progress-label">{label}</span>
+
+      <span className={`state-chip state-${state}`}>{state}</span>
     </div>
   );
 }
