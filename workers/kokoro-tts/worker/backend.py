@@ -6,10 +6,49 @@ module (and running the unit tests) never requires onnxruntime.
 """
 from __future__ import annotations
 
+import logging
+import re
 from dataclasses import dataclass, field
-from typing import Protocol, runtime_checkable
+from typing import Iterator, Protocol, runtime_checkable
 
 import numpy as np
+
+logger = logging.getLogger(__name__)
+
+# Non-speech symbols (bullets, dashes, marks) that carry no pronunciation and can
+# break the phonemizer — notably consecutive bullets, which produce empty
+# segments and the espeak error "number of lines in input and output must be
+# equal". Stripped before synthesis.
+_SYMBOLS = "•◦▪▫‣⁃∙·●○◆◇■□▶▷–—―§¶†‡※"
+
+
+def _collapse(text: str) -> str:
+    """Replace non-printable chars (newlines/control) with spaces and collapse
+    whitespace — so word boundaries survive instead of words getting glued."""
+    text = "".join(ch if ch.isprintable() else " " for ch in text)
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def sanitize_text(text: str) -> str:
+    """Remove non-speech symbols and tidy whitespace so the phonemizer gets clean,
+    single-line text (no empty segments from runs of bullets/dashes)."""
+    return _collapse(re.sub("[" + re.escape(_SYMBOLS) + "]", " ", text))
+
+
+def synthesis_variants(text: str) -> Iterator[str]:
+    """Progressively more conservative renderings of `text`. Phonemization can
+    still fail on odd token sequences, so we fall back to safe-punctuation-only
+    and finally alphanumeric-only rather than letting one chunk break a document."""
+    yield sanitize_text(text)
+    yield _collapse(re.sub(r"[^A-Za-z0-9 .,!?;:'-]", " ", text))
+    yield _collapse(re.sub(r"[^A-Za-z0-9 ]", " ", text))
+
+
+def _split_sentences(text: str) -> list[str]:
+    """Split into sentences (keeping terminators) so one bad sentence can be
+    isolated; falls back to the whole text when there's no boundary."""
+    parts = [s.strip() for s in re.split(r"(?<=[.!?])\s+", text) if s.strip()]
+    return parts or [text.strip()]
 
 
 @dataclass(frozen=True)
@@ -125,13 +164,42 @@ class KokoroBackend:
         return voice_id in self._voices
 
     def synthesize(self, text: str, voice_id: str, speed: float, language: str) -> Synthesis:
-        from .errors import TransientError
-
         # Kokoro expects locale codes (e.g. "en-us"); fall back to the voice's
         # language for generic 2-letter codes like "en".
         lang = language if language and "-" in language else self._voices[voice_id].language
-        try:
-            samples, sr = self._kokoro.create(text, voice=voice_id, speed=speed, lang=lang)
-        except Exception as exc:  # noqa: BLE001
-            raise TransientError(str(exc)) from exc
-        return Synthesis(np.asarray(samples, dtype=np.float32), int(sr), [])
+
+        # Fast path: synthesize the whole chunk.
+        whole = self._try_create(text, voice_id, speed, lang)
+        if whole is not None:
+            return Synthesis(whole, self._sample_rate, [])
+
+        # The phonemizer (misaki/espeak) can fail on rare token sequences
+        # ("number of lines ... must be equal"). Retry sentence by sentence so a
+        # stubborn sentence degrades to a SHORT silence instead of silencing the
+        # whole chunk — the document keeps reading.
+        parts: list[np.ndarray] = []
+        for sentence in _split_sentences(text):
+            audio = self._try_create(sentence, voice_id, speed, lang)
+            if audio is None:
+                words = max(1, len(sentence.split()))
+                seconds = min(words * 0.4, 8.0)
+                logger.warning("sentence failed all variants; %d words -> %.1fs silence",
+                               words, seconds)
+                audio = np.zeros(int(seconds * self._sample_rate), dtype=np.float32)
+            parts.append(audio)
+
+        merged = np.concatenate(parts) if parts else np.zeros(0, dtype=np.float32)
+        return Synthesis(merged, self._sample_rate, [])
+
+    def _try_create(self, text: str, voice_id: str, speed: float, lang: str):
+        """Synthesize `text`, trying progressively safer renderings. Returns the
+        float32 samples, or None if every variant failed to phonemize."""
+        for cleaned in synthesis_variants(text):
+            if not cleaned:
+                continue
+            try:
+                samples, _ = self._kokoro.create(cleaned, voice=voice_id, speed=speed, lang=lang)
+                return np.asarray(samples, dtype=np.float32)
+            except Exception:  # noqa: BLE001 — fall back to a safer rendering
+                continue
+        return None
