@@ -1,0 +1,101 @@
+name: pdftotts
+
+# Shared ROCm passthrough for the two GPU workers. The RX 7800 XT (gfx1101) is
+# spoofed as the supported gfx1100 via HSA_OVERRIDE_GFX_VERSION (design §8.2).
+x-rocm: &rocm
+  devices:
+    - /dev/kfd
+    - /dev/dri
+  group_add:
+    - video
+    - render
+  security_opt:
+    - seccomp:unconfined
+  ipc: host
+
+services:
+  kokoro-tts:
+    build:
+      context: .
+      dockerfile: workers/kokoro-tts/Dockerfile
+    <<: *rocm
+    environment:
+      HSA_OVERRIDE_GFX_VERSION: "11.0.0"
+      HIP_VISIBLE_DEVICES: "0"
+      GRPC_PORT: "50051"
+      DATA_DIR: "/data"
+      MODEL_DIR: "/models/kokoro"
+      MAX_CONCURRENCY: "1"
+    volumes:
+      - appdata:/data
+      - modelcache:/models
+    healthcheck:
+      test: ["CMD", "python3", "-m", "worker.healthcheck"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 120s
+    restart: unless-stopped
+
+  whisperx-align:
+    build:
+      context: .
+      dockerfile: workers/whisperx-align/Dockerfile
+    <<: *rocm
+    environment:
+      HSA_OVERRIDE_GFX_VERSION: "11.0.0"
+      HIP_VISIBLE_DEVICES: "0"
+      GRPC_PORT: "50052"
+      DATA_DIR: "/data"
+      ALIGN_LANGUAGE: "en"
+      ALIGN_DEVICE: "cuda"
+      ALIGN_CONFIDENCE_THRESHOLD: "0.30"
+      MAX_CONCURRENCY: "1"
+      HF_HOME: "/models/hf"  # cache wav2vec2 downloads on the modelcache volume
+    volumes:
+      - appdata:/data
+      - modelcache:/models
+    healthcheck:
+      test: ["CMD", "python", "-m", "worker.healthcheck"]
+      interval: 10s
+      timeout: 5s
+      retries: 18
+      start_period: 180s
+    restart: unless-stopped
+
+  api:
+    build:
+      context: .
+      dockerfile: src/PDFtoTTS.Api/Dockerfile
+    environment:
+      ASPNETCORE_URLS: "http://+:8080"
+      KOKORO_GRPC: "http://kokoro-tts:50051"
+      WHISPERX_GRPC: "http://whisperx-align:50052"
+      DATA_DIR: "/data"
+      PIPELINE_CONCURRENCY: "2"
+      MAX_TOKENS_PER_CHUNK: "350"
+    ports:
+      - "8080:8080"
+    volumes:
+      - appdata:/data
+    depends_on:
+      kokoro-tts:
+        condition: service_healthy
+      whisperx-align:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # Serves the built React SPA via nginx and proxies /api + /hubs to the api.
+  frontend:
+    build:
+      context: ./frontend
+    ports:
+      - "5173:80"
+    depends_on:
+      api:
+        condition: service_started
+    restart: unless-stopped
+
+volumes:
+  appdata:
+  modelcache:
