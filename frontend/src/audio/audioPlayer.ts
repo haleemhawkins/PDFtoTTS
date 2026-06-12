@@ -23,24 +23,46 @@ export class AudioQueuePlayer {
 
   constructor() {
     this.ctx = new AudioContext();
+    // iOS silences the Web Audio API when the device is in Ring/Silent mode (even
+    // though <video> still plays — different audio category), so the reader is
+    // mute-switched off with no error. The Audio Session API (Safari 16.4+) lets
+    // us opt into the "playback" category so audio plays regardless, like video.
+    const nav = navigator as Navigator & { audioSession?: { type: string } };
+    if (nav.audioSession) nav.audioSession.type = "playback";
   }
 
   /** Decode and buffer a chunk; recover from an underrun if we were waiting on it. */
   async ingest(chunkIndex: number, url: string, durationMs: number): Promise<void> {
     this.durationsMs.set(chunkIndex, durationMs);
     const data = await fetch(url).then((r) => r.arrayBuffer());
-    this.buffers.set(chunkIndex, await this.ctx.decodeAudioData(data));
+    this.buffers.set(chunkIndex, await this.decode(data));
     if (this.playing && this.source === null && chunkIndex === this.cursor) {
       this.onResumed?.();
-      this.startCurrent(0);
+      this.startCurrent(this.chunkStartOffsetMs);
     }
+  }
+
+  /**
+   * Decode using the CALLBACK form of decodeAudioData. iOS/older Safari do not
+   * support the promise-returning overload — `await ctx.decodeAudioData(data)`
+   * resolves to undefined there, so chunks never buffer and the player underruns
+   * forever (UI stuck on "processing", no audio). The callback form works across
+   * all browsers; a decode failure rejects so callers can surface it.
+   */
+  private decode(data: ArrayBuffer): Promise<AudioBuffer> {
+    return new Promise<AudioBuffer>((resolve, reject) =>
+      this.ctx.decodeAudioData(data, resolve, reject),
+    );
   }
 
   play(): void {
     if (this.playing) return;
     this.playing = true;
+    // iOS starts the context suspended; resume() must run inside the click
+    // gesture (it does — play() is called from the Play button handler).
     void this.ctx.resume();
-    if (this.source === null) this.startCurrent(0);
+    // Resume from where we paused/seeked to — NOT the start of the chunk.
+    if (this.source === null) this.startCurrent(this.chunkStartOffsetMs);
   }
 
   pause(): void {
@@ -77,9 +99,11 @@ export class AudioQueuePlayer {
     this.stopSource();
     this.cursor = target;
     this.playedBeforeMs = offset;
-    const within = globalMs - offset;
-    if (this.playing) this.startCurrent(within);
-    else this.chunkStartOffsetMs = within;
+    this.currentChunk = -1;
+    // Always record the within-chunk offset so play()/underrun recovery resume
+    // exactly at the seeked word, even if the target chunk isn't decoded yet.
+    this.chunkStartOffsetMs = globalMs - offset;
+    if (this.playing) this.startCurrent(this.chunkStartOffsetMs);
   }
 
   dispose(): void {
@@ -90,6 +114,9 @@ export class AudioQueuePlayer {
   // --- internals ----------------------------------------------------------
 
   private startCurrent(withinMs: number): void {
+    // Record the intended start offset up front so underrun recovery (ingest)
+    // resumes this chunk at the right place rather than a stale offset.
+    this.chunkStartOffsetMs = withinMs;
     const buffer = this.buffers.get(this.cursor);
     if (!buffer) {
       this.source = null;
@@ -114,7 +141,6 @@ export class AudioQueuePlayer {
 
     this.currentChunk = this.cursor;
     this.chunkStartCtxTime = this.ctx.currentTime;
-    this.chunkStartOffsetMs = withinMs;
     src.start(0, withinMs / 1000);
     this.source = src;
   }

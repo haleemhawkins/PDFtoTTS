@@ -46,7 +46,13 @@ export function useReader(): ReaderController {
   const onChunk = useCallback((chunk: ProcessedChunk) => {
     if (queue.current.has(chunk.chunkIndex)) return; // dedupe backfill vs live
     queue.current.add(chunk);
-    void player.current?.ingest(chunk.chunkIndex, chunk.audioUrl, chunk.durationMs);
+    // Surface (don't swallow) fetch/decode failures: a silently-rejected ingest
+    // leaves the chunk un-buffered and the player stuck "processing" with no
+    // audio and no clue why (this is how the float32-WAV bug hid).
+    player.current?.ingest(chunk.chunkIndex, chunk.audioUrl, chunk.durationMs).catch((e) => {
+      console.error("audio ingest failed for chunk", chunk.chunkIndex, e);
+      setError(`Audio decode failed (chunk ${chunk.chunkIndex}): ${e instanceof Error ? e.message : String(e)}`);
+    });
     rebuildTimeline();
   }, [rebuildTimeline]);
 
