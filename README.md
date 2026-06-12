@@ -64,8 +64,18 @@ DOTNET_SYSTEM_NET_DISABLEIPV6=1 dotnet test        # 82 tests
 
 # Python workers: generate stubs, then run the (GPU-free) unit tests
 ./workers/gen_proto.sh
-cd workers/kokoro-tts     && pip install -r requirements-dev.txt && pytest   # 12 tests
-cd workers/whisperx-align && pip install -r requirements-dev.txt && pytest   # 6 tests
+cd workers/kokoro-tts     && pip install -r requirements-dev.txt && pytest   # incl. WAV-format + phoneme-cap regression guards
+cd workers/whisperx-align && pip install -r requirements-dev.txt && pytest
+
+# Frontend unit tests
+cd frontend && npm test
+
+# Frontend e2e smoke test — runs against an ALREADY-RUNNING stack and exercises
+# the full path (upload -> synthesize -> SignalR -> playback -> decode -> highlight).
+# It hits the nginx-served bundle, so it catches failures the Vite dev server hides
+# (e.g. .mjs MIME, float32 WAV decode). First time: install the browser.
+docker compose up --build -d                     # or point E2E_BASE_URL at a running stack
+cd frontend && npx playwright install chromium && npm run test:e2e
 ```
 
 > Note: on networks where IPv6 egress is broken, prefix .NET restores with
