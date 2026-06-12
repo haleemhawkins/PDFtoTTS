@@ -59,6 +59,32 @@ public class WordMapAndChunkerTests
     }
 
     [Fact]
+    public void First_chunk_uses_the_smaller_first_chunk_limit()
+    {
+        var tokens = Tokens(100); // single-token sentences, so the limit binds
+
+        var chunks = new Chunker(maxTokensPerChunk: 40, firstChunkTokens: 10).Chunk(tokens);
+
+        // First chunk is small for a fast time-to-first-audio; the rest are full.
+        Assert.Equal(10, chunks[0].Tokens.Count);
+        Assert.All(chunks.Skip(1), c => Assert.True(c.Tokens.Count <= 40));
+        Assert.True(chunks.Count >= 2 && chunks[1].Tokens.Count > 10);
+
+        // Still contiguous and lossless across the boundary.
+        var flattened = chunks.SelectMany(c => c.Tokens).Select(t => t.Index).ToList();
+        Assert.Equal(Enumerable.Range(0, tokens.Count), flattened);
+    }
+
+    [Fact]
+    public void First_chunk_limit_is_clamped_to_the_max()
+    {
+        var tokens = Tokens(50);
+        // firstChunkTokens larger than max must not exceed max.
+        var chunks = new Chunker(maxTokensPerChunk: 20, firstChunkTokens: 999).Chunk(tokens);
+        Assert.All(chunks, c => Assert.True(c.Tokens.Count <= 20));
+    }
+
+    [Fact]
     public void Chunks_prefer_sentence_boundaries()
     {
         // Two sentences of 10 tokens each; limit 15 must break after sentence 1.

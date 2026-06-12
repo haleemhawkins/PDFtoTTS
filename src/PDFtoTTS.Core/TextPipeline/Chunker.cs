@@ -21,12 +21,23 @@ public sealed record Chunk(
 public sealed class Chunker
 {
     private readonly int _maxTokens;
+    private readonly int _firstChunkTokens;
 
-    public Chunker(int maxTokensPerChunk = 350)
+    /// <param name="maxTokensPerChunk">Upper bound on tokens per chunk.</param>
+    /// <param name="firstChunkTokens">
+    /// Token limit for the FIRST chunk only. Defaults to the same limit; set it
+    /// smaller so the first chunk synthesizes quickly and audio starts sooner
+    /// (time-to-first-audio), while later chunks stay large to limit per-chunk
+    /// overhead. Clamped to [1, maxTokensPerChunk].
+    /// </param>
+    public Chunker(int maxTokensPerChunk = 350, int? firstChunkTokens = null)
     {
         if (maxTokensPerChunk < 1)
             throw new ArgumentOutOfRangeException(nameof(maxTokensPerChunk));
         _maxTokens = maxTokensPerChunk;
+        _firstChunkTokens = firstChunkTokens is int f
+            ? Math.Clamp(f, 1, maxTokensPerChunk)
+            : maxTokensPerChunk;
     }
 
     public IReadOnlyList<Chunk> Chunk(IReadOnlyList<NormToken> tokens)
@@ -37,7 +48,8 @@ public sealed class Chunker
 
         while (i < tokens.Count)
         {
-            int hardEnd = Math.Min(i + _maxTokens, tokens.Count);
+            int limit = chunks.Count == 0 ? _firstChunkTokens : _maxTokens;
+            int hardEnd = Math.Min(i + limit, tokens.Count);
             int breakAt = hardEnd;
 
             if (hardEnd < tokens.Count)

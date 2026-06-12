@@ -24,6 +24,7 @@ public sealed class SessionPipeline
     private readonly TextNormalizer _normalizer;
     private readonly ILogger<SessionPipeline> _logger;
     private readonly int _maxTokensPerChunk;
+    private readonly int _firstChunkTokens;
     private readonly int _concurrency;
     private readonly ConcurrentDictionary<Guid, Task> _running = new();
 
@@ -45,6 +46,9 @@ public sealed class SessionPipeline
         _normalizer = normalizer;
         _logger = logger;
         _maxTokensPerChunk = config.GetValue("MAX_TOKENS_PER_CHUNK", 350);
+        // A small first chunk so audio starts in a few seconds instead of waiting
+        // for a full-size chunk to synthesize + align.
+        _firstChunkTokens = config.GetValue("FIRST_CHUNK_TOKENS", _maxTokensPerChunk);
         _concurrency = config.GetValue("PIPELINE_CONCURRENCY", 2);
     }
 
@@ -66,7 +70,7 @@ public sealed class SessionPipeline
             await SetStatus(sessionId, group, SessionStatus.Processing, ct);
 
             var tokens = _normalizer.Normalize(doc.Words);
-            var chunks = new Chunker(_maxTokensPerChunk).Chunk(tokens);
+            var chunks = new Chunker(_maxTokensPerChunk, _firstChunkTokens).Chunk(tokens);
             stored.TotalChunks = chunks.Count;
 
             var options = new PipelineOptions(

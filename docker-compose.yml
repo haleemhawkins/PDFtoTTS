@@ -75,11 +75,19 @@ services:
       KOKORO_GRPC: "http://kokoro-tts:50051"
       WHISPERX_GRPC: "http://whisperx-align:50052"
       DATA_DIR: "/data"
-      PIPELINE_CONCURRENCY: "2"
+      # Process chunks strictly in order. Kokoro is single-slot (MAX_CONCURRENCY=1),
+      # so concurrency>1 just makes the tiny first chunk race the large second one
+      # for the one synth slot, delaying time-to-first-audio. In-order keeps the
+      # small first chunk first; synth+align stays faster than realtime so later
+      # chunks still buffer ahead of playback.
+      PIPELINE_CONCURRENCY: "1"
       # Smaller chunks -> first audio is ready in seconds (not ~45s for one giant
       # 350-token chunk) and progress advances visibly per chunk. ~120 tokens is
       # roughly a few sentences.
       MAX_TOKENS_PER_CHUNK: "120"
+      # The FIRST chunk is tiny so audio starts in ~5s; later chunks stay at 120
+      # to keep per-chunk synth+align overhead low.
+      FIRST_CHUNK_TOKENS: "30"
     ports:
       - "8080:8080"
     volumes:
