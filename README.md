@@ -1,10 +1,11 @@
 # PDFtoTTS
 
 Self-hosted PDF/EPUB text-to-speech reader with synchronized word highlighting.
-Upload a document, hear it read aloud by [Kokoro](https://github.com/thewh1teagle/kokoro-onnx),
+Upload a document, hear it read aloud by [Kokoro](https://github.com/hexgrad/kokoro),
 and watch the spoken word highlight in the rendered page in real time — word
 timings come from [WhisperX](https://github.com/m-bain/whisperX) forced
-alignment, not synthesis estimates.
+alignment, not synthesis estimates. Both TTS and alignment run on the GPU, so a
+full document synthesizes in seconds and audio starts in well under a second.
 
 ## Architecture
 
@@ -13,7 +14,7 @@ Browser (React, PDF.js/epub.js, SignalR)
    │  REST + SignalR
 PDFtoTTS.Api (.NET 10 Minimal API + ReaderHub)
    │  gRPC (paths over the wire, not bytes)
-   ├── kokoro-tts      (Python, onnxruntime-rocm)   text → WAV on /data
+   ├── kokoro-tts      (Python, PyTorch/torch-rocm)  text → WAV on /data
    └── whisperx-align  (Python, torch-rocm)          WAV + transcript → word timings
          shared volume /data ── audio + originals
 ```
@@ -36,10 +37,12 @@ The workers spoof the RX 7800 XT as the supported gfx1100 via
 docker compose up --build
 ```
 
-On first start the Kokoro worker downloads its ONNX model into the `modelcache`
-volume and WhisperX downloads wav2vec2 into `HF_HOME`; both persist across
-restarts. Workers report healthy once their models are resident (the API waits
-for this via `depends_on: condition: service_healthy`).
+On first start each worker downloads its model from Hugging Face into the
+`modelcache` volume (Kokoro's TTS weights, WhisperX's wav2vec2) and warms up GPU
+kernels; the model and MIOpen kernel caches persist across restarts, so later
+boots are fast. Workers report healthy once their models are resident and warmed
+(the API waits for this via `depends_on: condition: service_healthy`); the first
+boot can take a few minutes (`start_period` is generous).
 
 - API: <http://localhost:8080>  (`GET /healthz`, `GET /api/voices`)
 - Frontend: <http://localhost:5173> (added in group 6)
@@ -60,11 +63,11 @@ curl http://localhost:8080/api/sessions/<sessionId>/chunks
 
 ```bash
 # .NET: build + test the whole solution
-DOTNET_SYSTEM_NET_DISABLEIPV6=1 dotnet test        # 82 tests
+DOTNET_SYSTEM_NET_DISABLEIPV6=1 dotnet test        # 86 tests
 
 # Python workers: generate stubs, then run the (GPU-free) unit tests
 ./workers/gen_proto.sh
-cd workers/kokoro-tts     && pip install -r requirements-dev.txt && pytest   # incl. WAV-format + phoneme-cap regression guards
+cd workers/kokoro-tts     && pip install -r requirements-dev.txt && pytest   # incl. WAV-format + text-sanitizer regression guards
 cd workers/whisperx-align && pip install -r requirements-dev.txt && pytest
 
 # Frontend unit tests
