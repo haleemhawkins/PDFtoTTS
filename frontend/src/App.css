@@ -1,0 +1,137 @@
+:root {
+  --accent: #ffd54a;
+  --bg: #1e1e22;
+  --panel: #2a2a30;
+}
+
+.app {
+  max-width: 1100px;
+  margin: 0 auto;
+  padding: 1rem;
+  color: #eee;
+}
+
+.upload-view {
+  display: flex;
+  flex-direction: column;
+  gap: 0.9rem;
+  max-width: 480px;
+  margin: 4rem auto;
+  background: var(--panel);
+  padding: 1.5rem;
+  border-radius: 12px;
+}
+
+.upload-view label,
+.playback-bar label {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.reader-view {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.playback-bar {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  background: var(--panel);
+  padding: 0.6rem 0.9rem;
+  border-radius: 10px;
+}
+
+.progress {
+  flex: 1;
+  height: 6px;
+  background: #444;
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+.progress-fill {
+  height: 100%;
+  background: var(--accent);
+  transition: width 0.2s ease;
+}
+
+.state-chip {
+  font-size: 0.8rem;
+  text-transform: uppercase;
+  opacity: 0.7;
+}
+
+.scrubber {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  background: var(--panel);
+  padding: 0.5rem 0.9rem;
+  border-radius: 10px;
+}
+
+.scrubber input[type="range"] {
+  flex: 1;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
+.scrubber .time {
+  font-variant-numeric: tabular-nums;
+  font-size: 0.85rem;
+  opacity: 0.8;
+  min-width: 3.2em;
+  text-align: center;
+}
+
+.pdf-stage {
+  display: inline-block;
+  position: relative;
+  margin: 0 auto;
+}
+
+.word-overlay {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.word-box {
+  position: absolute;
+  pointer-events: auto;
+  cursor: pointer;
+  border-radius: 2px;
+}
+
+.word-box.active {
+  background: rgba(255, 213, 74, 0.45);
+  box-shadow: 0 0 0 1px rgba(255, 213, 74, 0.7);
+}
+
+.pdf-pager {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  justify-content: center;
+}
+
+.error-banner {
+  background: #5a2330;
+  color: #ffd7d7;
+  padding: 0.6rem 0.9rem;
+  border-radius: 8px;
+  margin-bottom: 0.75rem;
+}
+
+.epub-note {
+  background: var(--panel);
+  padding: 1rem;
+  border-radius: 8px;
+  opacity: 0.85;
+}
