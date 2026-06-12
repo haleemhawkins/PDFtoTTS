@@ -1,0 +1,35 @@
+syntax = "proto3";
+
+package pdftotts.alignment.v1;
+
+import "common.proto";
+
+option csharp_namespace = "PDFtoTTS.Grpc.Alignment.V1";
+
+// WhisperX forced-alignment worker. Reads the chunk WAV from the shared volume
+// by path and aligns the known transcript against it (alignment only, never
+// open-vocabulary transcription).
+service Alignment {
+  rpc Align(AlignRequest) returns (AlignResponse);
+  rpc Health(pdftotts.common.v1.HealthRequest)
+      returns (pdftotts.common.v1.HealthResponse);
+}
+
+message AlignRequest {
+  string audio_path = 1;   // path under /data to the chunk WAV
+  string transcript = 2;   // exact normalized text that was synthesized
+  string language = 3;     // ISO 639-1
+}
+
+message WordTiming {
+  string text = 1;
+  int64  start_ms = 2;
+  int64  end_ms = 3;
+  float  confidence = 4;     // 0..1
+  bool   low_confidence = 5; // below the worker's threshold
+}
+
+message AlignResponse {
+  repeated WordTiming words = 1;
+  int64 audio_duration_ms = 2;
+}

@@ -1,0 +1,16 @@
+bin/
+obj/
+/packages/
+riderModule.iml
+/_ReSharper.Caches/
+# IDE / local agent config
+.idea/
+.claude/
+# Frontend
+node_modules/
+dist/
+# Python worker generated gRPC stubs (regenerated via workers/gen_proto.sh / Docker)
+workers/*/generated/
+__pycache__/
+*.pyc
+.venv/

@@ -1,0 +1,11 @@
+**/bin/
+**/obj/
+**/node_modules/
+**/generated/
+**/.venv/
+**/__pycache__/
+.git/
+.idea/
+.vs/
+frontend/dist/
+**/*.user

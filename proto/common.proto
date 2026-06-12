@@ -1,0 +1,33 @@
+syntax = "proto3";
+
+package pdftotts.common.v1;
+
+option csharp_namespace = "PDFtoTTS.Grpc.Common.V1";
+
+// Liveness/readiness shared by both workers. A worker reports NOT_READY until
+// its model is resident on the selected device, then SERVING.
+message HealthRequest {}
+
+message HealthResponse {
+  enum Status {
+    STATUS_UNSPECIFIED = 0;
+    STATUS_NOT_READY = 1;
+    STATUS_SERVING = 2;
+  }
+  Status status = 1;
+  string detail = 2;  // e.g. "ROCMExecutionProvider, device 0, model loaded"
+}
+
+// Voice catalogue, served by the TTS worker and proxied by the API.
+message ListVoicesRequest {}
+
+message Voice {
+  string id = 1;        // e.g. "af_heart"
+  string label = 2;     // human-readable
+  string language = 3;  // ISO 639-1
+  string gender = 4;
+}
+
+message ListVoicesResponse {
+  repeated Voice voices = 1;
+}

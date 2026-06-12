@@ -1,0 +1,42 @@
+syntax = "proto3";
+
+package pdftotts.kokoro.v1;
+
+import "common.proto";
+
+option csharp_namespace = "PDFtoTTS.Grpc.Kokoro.V1";
+
+// Kokoro ONNX text-to-speech worker. Audio is written to the shared volume by
+// path; only paths + small metadata cross gRPC (never raw PCM bytes).
+service KokoroTts {
+  rpc Synthesize(SynthesizeRequest) returns (SynthesizeResponse);
+  rpc ListVoices(pdftotts.common.v1.ListVoicesRequest)
+      returns (pdftotts.common.v1.ListVoicesResponse);
+  rpc Health(pdftotts.common.v1.HealthRequest)
+      returns (pdftotts.common.v1.HealthResponse);
+}
+
+message SynthesizeRequest {
+  string text = 1;       // normalized chunk text
+  string voice_id = 2;   // e.g. "af_heart"; see ListVoices
+  float  speed = 3;      // 0.5..2.0, default 1.0
+  string language = 4;   // ISO 639-1
+  string out_path = 5;   // path under /data to write WAV,
+                         // e.g. "audio/{sessionId}/00007.wav"
+}
+
+// Synthesis-time timing prior (the durations Kokoro used). The authoritative
+// word timings come later from forced alignment.
+message PhonemeDuration {
+  string phoneme = 1;
+  double start_seconds = 2;
+  double end_seconds = 3;
+}
+
+message SynthesizeResponse {
+  string audio_path = 1;        // echoes out_path actually written
+  uint32 sample_rate = 2;       // 24000
+  uint32 channels = 3;          // 1
+  double duration_seconds = 4;
+  repeated PhonemeDuration phonemes = 5;
+}
