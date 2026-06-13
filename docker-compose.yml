@@ -56,6 +56,13 @@ services:
       ALIGN_CONFIDENCE_THRESHOLD: "0.30"
       MAX_CONCURRENCY: "1"
       HF_HOME: "/models/hf"  # cache wav2vec2 downloads on the modelcache volume
+      # Heuristic MIOpen kernel selection (same as kokoro): alignment runs over
+      # variable-length audio, and the default per-shape tuning search makes each
+      # align take ~100s once Kokoro also shares the GPU. FAST + a persisted,
+      # SEPARATE kernel cache keeps alignment ~1-2s.
+      MIOPEN_FIND_MODE: "FAST"
+      MIOPEN_USER_DB_PATH: "/models/miopen-wx"
+      MIOPEN_CUSTOM_CACHE_DIR: "/models/miopen-wx"
     volumes:
       - appdata:/data
       - modelcache:/models
