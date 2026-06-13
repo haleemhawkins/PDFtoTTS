@@ -23,6 +23,14 @@ export interface WordData {
   confidence?: number;
 }
 
+/** A source document word (no timing) from GET /api/documents/{id}/words. */
+export interface SourceWordData {
+  index: number;
+  text: string;
+  page: number | null;
+  bbox: BoundingBox | null;
+}
+
 export interface ProcessedChunk {
   chunkIndex: number;
   audioUrl: string;

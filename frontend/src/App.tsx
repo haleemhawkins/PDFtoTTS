@@ -61,7 +61,8 @@ export default function App() {
               file={file}
               timeline={reader.timeline}
               activeIndex={reader.activeIndex}
-              onSeekToWord={reader.seekToWord}
+              onJumpToWord={reader.jumpToWord}
+              onJumpToPage={reader.jumpToPage}
             />
           ) : file ? (
             <EpubReader

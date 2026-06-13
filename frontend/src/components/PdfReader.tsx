@@ -7,6 +7,7 @@ pdfjsLib.GlobalWorkerOptions.workerSrc = workerUrl;
 
 interface OverlayBox {
   timelineIndex: number;
+  wordIndex: number; // source document word index
   left: number;
   top: number;
   width: number;
@@ -18,10 +19,11 @@ interface Props {
   timeline: Timeline;
   activeIndex: number;
   scale?: number;
-  onSeekToWord: (timelineIndex: number) => void;
+  onJumpToWord: (sourceWordIndex: number) => void;
+  onJumpToPage: (page: number) => void;
 }
 
-export function PdfReader({ file, timeline, activeIndex, scale = 1.5, onSeekToWord }: Props) {
+export function PdfReader({ file, timeline, activeIndex, scale = 1.5, onJumpToWord, onJumpToPage }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const activeBoxRef = useRef<HTMLDivElement | null>(null);
   const lastManualScroll = useRef(0);
@@ -29,9 +31,6 @@ export function PdfReader({ file, timeline, activeIndex, scale = 1.5, onSeekToWo
   const [page, setPage] = useState(1);
   const [viewport, setViewport] = useState<pdfjsLib.PageViewport | null>(null);
   const [overlays, setOverlays] = useState<OverlayBox[]>([]);
-  // Set when the user jumps to a page that hasn't been synthesized yet; the
-  // seek+read is performed once that page's words stream in.
-  const [pendingPage, setPendingPage] = useState<number | null>(null);
 
   const SCROLL_GRACE_MS = 2500;
 
@@ -100,6 +99,7 @@ export function PdfReader({ file, timeline, activeIndex, scale = 1.5, onSeekToWo
       ]);
       boxes.push({
         timelineIndex: i,
+        wordIndex: w.wordIndex,
         left: Math.min(r[0], r[2]),
         top: Math.min(r[1], r[3]),
         width: Math.abs(r[2] - r[0]),
@@ -109,24 +109,11 @@ export function PdfReader({ file, timeline, activeIndex, scale = 1.5, onSeekToWo
     setOverlays(boxes);
   }, [viewport, timeline, page]);
 
-  // Follow the active word across pages while playing (auto page-turn), unless
-  // the user has jumped ahead to a page that isn't ready yet.
+  // Follow the active word across pages while playing (auto page-turn).
   useEffect(() => {
-    if (pendingPage != null) return;
     const active = timeline.words[activeIndex];
     if (active?.page && active.page !== page) setPage(active.page);
-  }, [activeIndex, timeline, page, pendingPage]);
-
-  // Resolve a deferred page jump: once the target page's words have streamed in,
-  // seek there and start reading.
-  useEffect(() => {
-    if (pendingPage == null) return;
-    const first = timeline.words.findIndex((w) => w.page === pendingPage);
-    if (first >= 0) {
-      onSeekToWord(first);
-      setPendingPage(null);
-    }
-  }, [timeline, pendingPage, onSeekToWord]);
+  }, [activeIndex, timeline, page]);
 
   // Record genuine user scrolls (wheel/touch) — not programmatic scrollIntoView —
   // to grant a grace period during which auto-scroll backs off (design §6.7).
@@ -148,18 +135,12 @@ export function PdfReader({ file, timeline, activeIndex, scale = 1.5, onSeekToWo
     activeBoxRef.current?.scrollIntoView({ block: "center", behavior: "smooth" });
   }, [activeIndex]);
 
-  // Manual page jump: change the page AND seek playback to that page's first
-  // word. If that page isn't synthesized yet, defer the seek until it is.
+  // Manual page jump: show the page and read from its first word — synthesizing
+  // from there if needed, so jumping ahead doesn't wait for earlier pages.
   const goToPage = (target: number) => {
     if (!pdf || target < 1 || target > pdf.numPages) return;
     setPage(target);
-    const first = timeline.words.findIndex((w) => w.page === target);
-    if (first >= 0) {
-      onSeekToWord(first);
-      setPendingPage(null);
-    } else {
-      setPendingPage(target);
-    }
+    onJumpToPage(target);
   };
 
   const activeWord: TimelineWord | undefined = timeline.words[activeIndex];
@@ -175,7 +156,7 @@ export function PdfReader({ file, timeline, activeIndex, scale = 1.5, onSeekToWo
               ref={b.timelineIndex === activeIndex ? activeBoxRef : undefined}
               className={"word-box" + (b.timelineIndex === activeIndex ? " active" : "")}
               style={{ left: b.left, top: b.top, width: b.width, height: b.height }}
-              onClick={() => onSeekToWord(b.timelineIndex)}
+              onClick={() => onJumpToWord(b.wordIndex)}
             />
           ))}
         </div>

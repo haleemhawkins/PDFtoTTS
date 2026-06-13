@@ -1,4 +1,4 @@
-import type { DocumentInfo, ProcessedChunk, TtsSession, Voice } from "./types";
+import type { DocumentInfo, ProcessedChunk, SourceWordData, TtsSession, Voice } from "./types";
 
 async function asJson<T>(res: Response): Promise<T> {
   if (!res.ok) {
@@ -25,12 +25,13 @@ export async function createSession(
   voice: string,
   speed: number,
   language = "en",
+  startWordIndex = 0,
 ): Promise<TtsSession> {
   return asJson(
     await fetch(`/api/documents/${documentId}/sessions`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ voice, speed, language }),
+      body: JSON.stringify({ voice, speed, language, startWordIndex }),
     }),
   );
 }
@@ -41,6 +42,10 @@ export async function getSession(id: string): Promise<TtsSession> {
 
 export async function getChunks(id: string): Promise<ProcessedChunk[]> {
   return asJson(await fetch(`/api/sessions/${id}/chunks`));
+}
+
+export async function getWords(documentId: string): Promise<SourceWordData[]> {
+  return asJson(await fetch(`/api/documents/${documentId}/words`));
 }
 
 export async function getVoices(): Promise<Voice[]> {
