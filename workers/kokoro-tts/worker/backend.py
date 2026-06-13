@@ -53,6 +53,21 @@ def _split_sentences(text: str) -> list[str]:
     return parts or [text.strip()]
 
 
+def trim_silence(samples: np.ndarray, sample_rate: int = 24000, threshold: float = 0.01,
+                 head_keep_ms: int = 20, tail_keep_ms: int = 140) -> np.ndarray:
+    """Trim a chunk's leading/trailing near-silence (Kokoro adds ~300ms head and
+    ~490ms tail) so chunks don't stack ~0.8s of dead air at every boundary and the
+    reading flows. A small natural pad is kept on each side."""
+    if samples.size == 0:
+        return samples
+    loud = np.flatnonzero(np.abs(samples) > threshold)
+    if loud.size == 0:
+        return samples
+    start = max(0, int(loud[0] - head_keep_ms / 1000 * sample_rate))
+    end = min(samples.size, int(loud[-1] + tail_keep_ms / 1000 * sample_rate))
+    return samples[start:end]
+
+
 @dataclass(frozen=True)
 class Phoneme:
     phoneme: str
@@ -172,7 +187,7 @@ class KokoroBackend:
         # Fast path: synthesize the whole chunk.
         whole = self._try_create(text, voice_id, speed)
         if whole is not None:
-            return Synthesis(whole, self._sample_rate, [])
+            return Synthesis(trim_silence(whole, self._sample_rate), self._sample_rate, [])
 
         # The phonemizer (misaki/espeak) can fail on rare token sequences
         # ("number of lines ... must be equal"). Retry sentence by sentence so a
@@ -190,7 +205,7 @@ class KokoroBackend:
             parts.append(audio)
 
         merged = np.concatenate(parts) if parts else np.zeros(0, dtype=np.float32)
-        return Synthesis(merged, self._sample_rate, [])
+        return Synthesis(trim_silence(merged, self._sample_rate), self._sample_rate, [])
 
     def _try_create(self, text: str, voice_id: str, speed: float):
         """Synthesize `text`, trying progressively safer renderings. Returns the
