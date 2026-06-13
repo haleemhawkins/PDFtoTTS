@@ -53,6 +53,11 @@ def _split_sentences(text: str) -> list[str]:
     return parts or [text.strip()]
 
 
+# Pause inserted after each sentence so a period gets a natural beat instead of
+# rushing into the next sentence. Tunable via env (milliseconds).
+_SENTENCE_GAP_MS = max(0, int(os.environ.get("SENTENCE_GAP_MS", "260")))
+
+
 def trim_silence(samples: np.ndarray, sample_rate: int = 24000, threshold: float = 0.01,
                  head_keep_ms: int = 20, tail_keep_ms: int = 140) -> np.ndarray:
     """Trim a chunk's leading/trailing near-silence (Kokoro adds ~300ms head and
@@ -184,15 +189,13 @@ class KokoroBackend:
         return voice_id in self._voices
 
     def synthesize(self, text: str, voice_id: str, speed: float, language: str) -> Synthesis:
-        # Fast path: synthesize the whole chunk.
-        whole = self._try_create(text, voice_id, speed)
-        if whole is not None:
-            return Synthesis(trim_silence(whole, self._sample_rate), self._sample_rate, [])
-
-        # The phonemizer (misaki/espeak) can fail on rare token sequences
-        # ("number of lines ... must be equal"). Retry sentence by sentence so a
-        # stubborn sentence degrades to a SHORT silence instead of silencing the
-        # whole chunk — the document keeps reading.
+        # Synthesize sentence by sentence and insert a controlled pause after each,
+        # so periods get a natural beat (Kokoro's own inter-sentence pause is too
+        # short) and each sentence keeps its own intonation. A stubborn sentence
+        # (phonemizer failure) degrades to a short silence instead of breaking the
+        # document.
+        sr = self._sample_rate
+        gap = np.zeros(int(_SENTENCE_GAP_MS / 1000 * sr), dtype=np.float32)
         parts: list[np.ndarray] = []
         for sentence in _split_sentences(text):
             audio = self._try_create(sentence, voice_id, speed)
@@ -201,11 +204,15 @@ class KokoroBackend:
                 seconds = min(words * 0.4, 8.0)
                 logger.warning("sentence failed all variants; %d words -> %.1fs silence",
                                words, seconds)
-                audio = np.zeros(int(seconds * self._sample_rate), dtype=np.float32)
+                audio = np.zeros(int(seconds * sr), dtype=np.float32)
+            else:
+                # Trim tight; the controlled gap below supplies the sentence pause.
+                audio = trim_silence(audio, sr, head_keep_ms=10, tail_keep_ms=40)
             parts.append(audio)
+            parts.append(gap)
 
         merged = np.concatenate(parts) if parts else np.zeros(0, dtype=np.float32)
-        return Synthesis(trim_silence(merged, self._sample_rate), self._sample_rate, [])
+        return Synthesis(merged, sr, [])
 
     def _try_create(self, text: str, voice_id: str, speed: float):
         """Synthesize `text`, trying progressively safer renderings. Returns the
