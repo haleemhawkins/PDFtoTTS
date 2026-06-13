@@ -89,6 +89,7 @@ def serve() -> None:
     device = os.environ.get("ALIGN_DEVICE", "cuda")  # ROCm presents as "cuda" to torch
     backend = WhisperXBackend(device)
     backend.preload(language)  # keep wav2vec2 resident before serving
+    backend.warmup(language)  # compile GPU kernels so the first align is fast
 
     alignment_pb2_grpc.add_AlignmentServicer_to_server(
         AlignmentServicer(backend, data_dir, threshold, max_concurrency, health), server)

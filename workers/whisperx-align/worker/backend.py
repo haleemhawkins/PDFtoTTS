@@ -6,8 +6,11 @@ a fake. The real backend lazily imports whisperx/torch, so importing this module
 """
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from typing import Protocol, runtime_checkable
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -54,6 +57,22 @@ class WhisperXBackend:
         if language not in self._models:
             model, metadata = whisperx.load_align_model(language_code=language, device=self._device)
             self._models[language] = (model, metadata)
+
+    def warmup(self, language: str = "en") -> None:
+        """Run one dummy alignment so the FIRST real request doesn't pay the
+        one-time GPU/MIOpen kernel compilation (tens of seconds on ROCm)."""
+        import numpy as np
+        import whisperx
+
+        self.preload(language)
+        model, metadata = self._models[language]
+        try:
+            audio = np.zeros(self.SAMPLE_RATE, dtype=np.float32)  # 1s of silence
+            segments = [{"text": "warm up the alignment kernels now", "start": 0.0, "end": 1.0}]
+            whisperx.align(segments, model, metadata, audio, self._device,
+                           return_char_alignments=False)
+        except Exception as exc:  # noqa: BLE001 — warmup is best-effort
+            logger.warning("alignment warmup failed: %s", exc)
 
     def align(self, audio_path: str, transcript: str, language: str) -> AlignResult:
         import whisperx
