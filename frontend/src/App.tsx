@@ -20,7 +20,9 @@ export default function App() {
 
   const onSpeed = (s: number) => {
     setSpeed(s);
-    reader.setRate(s);
+    // Re-synthesize at Kokoro's native speed so the pace changes with a natural
+    // pitch (not the resampled "chipmunk" effect of changing playback rate).
+    void reader.changeSpeed(s);
   };
 
   const inReader =

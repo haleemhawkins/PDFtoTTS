@@ -21,6 +21,9 @@ export interface ReaderController {
   play: () => void;
   pause: () => void;
   setRate: (rate: number) => void;
+  /** Re-synthesize at a new speaking pace (Kokoro native speed = natural pitch)
+   *  and resume at the current word. */
+  changeSpeed: (speed: number) => Promise<void>;
   seekToWord: (timelineIndex: number) => void;
   seekToMs: (ms: number) => void;
   getPositionMs: () => number;
@@ -38,6 +41,11 @@ export function useReader(): ReaderController {
   const connection = useRef<ReaderConnection | null>(null);
   const raf = useRef<number | null>(null);
   const wasPlaying = useRef(false);
+  // Identity of the loaded doc + the source-word to resume at after a re-synth.
+  const docId = useRef<string | null>(null);
+  const voiceRef = useRef("af_heart");
+  const activeIndexRef = useRef(-1);
+  const resumeSourceWord = useRef<number | null>(null);
 
   const rebuildTimeline = useCallback(() => {
     setTimeline(buildTimeline(queue.current.contiguous()));
@@ -65,43 +73,61 @@ export function useReader(): ReaderController {
     raf.current = requestAnimationFrame(tick);
   }, []);
 
-  // Keep a ref of the latest timeline for the rAF loop.
+  // Keep refs of the latest timeline + active index for the rAF loop and re-sync.
   const timelineRef = useRef(timeline);
   useEffect(() => {
     timelineRef.current = timeline;
   }, [timeline]);
+  useEffect(() => {
+    activeIndexRef.current = activeIndex;
+  }, [activeIndex]);
+
+  // Create a session for the already-uploaded doc and wire up streaming. Reuses
+  // the existing AudioQueuePlayer (reset, not recreated) so iOS audio stays
+  // unlocked across a re-synth.
+  const openSession = useCallback(async (voice: string, speed: number) => {
+    if (!docId.current) return;
+    await connection.current?.stop();
+    queue.current = new ChunkQueue<ProcessedChunk>();
+    setTimeline(EMPTY_TIMELINE);
+    setProgress(0);
+
+    if (player.current) player.current.reset();
+    else player.current = new AudioQueuePlayer();
+    player.current.onUnderrun = () => setState((s) => (s === "playing" ? "processing" : s));
+    player.current.onResumed = () => setState((s) => (wasPlaying.current ? "playing" : s));
+
+    setState("processing");
+    const session = await api.createSession(docId.current, voice, speed);
+    connection.current = new ReaderConnection(session.id, {
+      onChunk,
+      onProgress: (p) => setProgress(p.progress),
+      onStatus: (status) => {
+        if (status === "Error") setState("error");
+      },
+      onError: (e) => {
+        setError(e.message);
+        setState("error");
+      },
+      onReconnecting: () => setState("reconnecting"),
+      onReconnected: () => setState(wasPlaying.current ? "playing" : "processing"),
+    });
+    await connection.current.start();
+  }, [onChunk]);
 
   const start = useCallback(async (file: File, voice: string, speed: number) => {
     try {
       setError(null);
       setState("uploading");
       const doc = await api.uploadDocument(file);
-      const session = await api.createSession(doc.id, voice, speed);
-      setState("processing");
-
-      player.current = new AudioQueuePlayer();
-      player.current.onUnderrun = () => setState((s) => (s === "playing" ? "processing" : s));
-      player.current.onResumed = () => setState((s) => (wasPlaying.current ? "playing" : s));
-
-      connection.current = new ReaderConnection(session.id, {
-        onChunk,
-        onProgress: (p) => setProgress(p.progress),
-        onStatus: (status) => {
-          if (status === "Error") setState("error");
-        },
-        onError: (e) => {
-          setError(e.message);
-          setState("error");
-        },
-        onReconnecting: () => setState("reconnecting"),
-        onReconnected: () => setState(wasPlaying.current ? "playing" : "processing"),
-      });
-      await connection.current.start();
+      docId.current = doc.id;
+      voiceRef.current = voice;
+      await openSession(voice, speed);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
       setState("error");
     }
-  }, [onChunk]);
+  }, [openSession]);
 
   const play = useCallback(() => {
     player.current?.play();
@@ -117,6 +143,35 @@ export function useReader(): ReaderController {
   }, []);
 
   const setRate = useCallback((rate: number) => player.current?.setRate(rate), []);
+
+  // Re-synthesize the document at a new Kokoro speed (natural pitch, unlike the
+  // playback-rate trick which shifts pitch) and resume at the current word.
+  const changeSpeed = useCallback(async (speed: number) => {
+    if (!docId.current) return;
+    const current = timelineRef.current.words[activeIndexRef.current];
+    resumeSourceWord.current = current?.wordIndex ?? 0;
+    setActiveIndex(-1);
+    try {
+      await openSession(voiceRef.current, speed);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+      setState("error");
+    }
+  }, [openSession]);
+
+  // After a re-synth, jump to the word we were on as soon as it streams in.
+  useEffect(() => {
+    const target = resumeSourceWord.current;
+    if (target == null) return;
+    const idx = timeline.words.findIndex((w) => w.wordIndex === target);
+    if (idx < 0) return;
+    resumeSourceWord.current = null;
+    const word = timeline.words[idx];
+    player.current?.seek(word.globalStartMs, timeline.chunkOffsets);
+    setActiveIndex(idx);
+    if (wasPlaying.current) play();
+    else setState("paused");
+  }, [timeline, play]);
 
   // Seek to a word and START reading from there (used by page/section navigation
   // and click-to-seek), so the voice reads the page you jumped to.
@@ -145,6 +200,6 @@ export function useReader(): ReaderController {
 
   return {
     state, progress, timeline, activeIndex, error,
-    start, play, pause, setRate, seekToWord, seekToMs, getPositionMs,
+    start, play, pause, setRate, changeSpeed, seekToWord, seekToMs, getPositionMs,
   };
 }

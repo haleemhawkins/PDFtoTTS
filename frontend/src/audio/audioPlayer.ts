@@ -106,6 +106,21 @@ export class AudioQueuePlayer {
     if (this.playing) this.startCurrent(this.chunkStartOffsetMs);
   }
 
+  /** Drop all buffered audio and rewind to the start, KEEPING the AudioContext
+   *  (so iOS stays unlocked). Used when a new session's stream replaces the old
+   *  one, e.g. re-synthesizing at a different speed. */
+  reset(): void {
+    this.stopSource();
+    this.buffers.clear();
+    this.durationsMs.clear();
+    this.playing = false;
+    this.rate = 1;
+    this.cursor = 0;
+    this.currentChunk = -1;
+    this.chunkStartOffsetMs = 0;
+    this.playedBeforeMs = 0;
+  }
+
   dispose(): void {
     this.stopSource();
     void this.ctx.close();
