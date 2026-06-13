@@ -13,6 +13,19 @@ def test_sanitize_strips_bullets_and_collapses_whitespace():
     assert sanitize_text("keep-the-hyphen here") == "keep-the-hyphen here"
 
 
+def test_sanitize_normalizes_punctuation_for_prosody():
+    # Smart apostrophe must become straight or "don't" mispronounces.
+    assert sanitize_text("don’t stop") == "don't stop"
+    # Smart quotes -> straight.
+    assert sanitize_text("“Hello”") == '"Hello"'
+    # Em-dash -> comma pause, even when glued to words.
+    assert sanitize_text("SQL—including joins") == "SQL, including joins"
+    # Ellipsis preserved as a trailing-off pause.
+    assert sanitize_text("Well… maybe") == "Well... maybe"
+    # No space before punctuation; stacked separators collapse.
+    assert sanitize_text("a — , b") == "a, b"
+
+
 def test_synthesis_variants_get_progressively_safer():
     vs = list(synthesis_variants("Foo — bar (May 2022) ● baz!"))
     assert len(vs) == 3

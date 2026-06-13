@@ -17,24 +17,45 @@ import numpy as np
 
 logger = logging.getLogger(__name__)
 
-# Non-speech symbols (bullets, dashes, marks) that carry no pronunciation and can
-# break the phonemizer — notably consecutive bullets, which produce empty
-# segments and the espeak error "number of lines in input and output must be
-# equal". Stripped before synthesis.
-_SYMBOLS = "•◦▪▫‣⁃∙·●○◆◇■□▶▷–—―§¶†‡※"
+# True non-speech symbols (bullets, list/section marks): no pronunciation and a
+# run of them breaks the phonemizer ("number of lines ... must be equal"). Dropped.
+_DROP = "•◦▪▫‣⁃∙·●○◆◇■□▶▷§¶†‡※"
+
+# Fancy punctuation -> plain forms the voice reads with the RIGHT prosody. Smart
+# apostrophes must become straight or contractions ("don't") mispronounce; em/en
+# dashes become a comma pause (also un-gluing "word—word"); ellipsis trails off.
+_PUNCT = {
+    "‘": "'", "’": "'", "‚": "'", "‛": "'",      # ‘ ’ ‚ ‛ -> '
+    "“": '"', "”": '"', "„": '"', "‟": '"',      # “ ” „ ‟ -> "
+    "–": ", ", "—": ", ", "―": ", ", "−": "-",   # – — ― −
+    "…": "...",                                                  # … -> ...
+    " ": " ", " ": " ", " ": " ", "​": "",        # nbsp/thin/zwsp
+}
+_PUNCT_TABLE = str.maketrans(_PUNCT)
+
+
+def normalize_punctuation(text: str) -> str:
+    """Map smart quotes / dashes / ellipsis / exotic spaces to plain equivalents so
+    the voice gets correct prosody (and contractions aren't mangled)."""
+    return text.translate(_PUNCT_TABLE)
 
 
 def _collapse(text: str) -> str:
-    """Replace non-printable chars (newlines/control) with spaces and collapse
-    whitespace — so word boundaries survive instead of words getting glued."""
+    """Tidy whitespace and punctuation spacing: non-printables -> space, collapse
+    runs, no space before a mark, and dedupe stacked separators (from dash->comma)."""
     text = "".join(ch if ch.isprintable() else " " for ch in text)
-    return re.sub(r"\s+", " ", text).strip()
+    text = re.sub(r"\s+", " ", text)
+    text = re.sub(r"\s+([,.;:!?])", r"\1", text)          # no space before punctuation
+    text = re.sub(r"([,;:])(?:\s*[,;:])+", r"\1", text)   # collapse stacked separators
+    return text.strip()
 
 
 def sanitize_text(text: str) -> str:
-    """Remove non-speech symbols and tidy whitespace so the phonemizer gets clean,
-    single-line text (no empty segments from runs of bullets/dashes)."""
-    return _collapse(re.sub("[" + re.escape(_SYMBOLS) + "]", " ", text))
+    """Normalize punctuation for natural prosody, drop non-speech symbols, and tidy
+    whitespace so the phonemizer gets clean, single-line text."""
+    text = normalize_punctuation(text)
+    text = re.sub("[" + re.escape(_DROP) + "]", " ", text)
+    return _collapse(text)
 
 
 def synthesis_variants(text: str) -> Iterator[str]:
@@ -196,6 +217,8 @@ class KokoroBackend:
         # document.
         sr = self._sample_rate
         gap = np.zeros(int(_SENTENCE_GAP_MS / 1000 * sr), dtype=np.float32)
+        # A slightly longer beat after a question/exclamation reads more naturally.
+        gap_strong = np.zeros(int(_SENTENCE_GAP_MS * 1.4 / 1000 * sr), dtype=np.float32)
         parts: list[np.ndarray] = []
         for sentence in _split_sentences(text):
             audio = self._try_create(sentence, voice_id, speed)
@@ -209,7 +232,7 @@ class KokoroBackend:
                 # Trim tight; the controlled gap below supplies the sentence pause.
                 audio = trim_silence(audio, sr, head_keep_ms=10, tail_keep_ms=40)
             parts.append(audio)
-            parts.append(gap)
+            parts.append(gap_strong if sentence.rstrip()[-1:] in "?!" else gap)
 
         merged = np.concatenate(parts) if parts else np.zeros(0, dtype=np.float32)
         return Synthesis(merged, sr, [])
