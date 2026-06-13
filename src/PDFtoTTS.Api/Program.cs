@@ -121,9 +121,16 @@ app.MapPost("/api/documents/{id:guid}/sessions", (Guid id, CreateSessionRequest 
     if (string.IsNullOrWhiteSpace(body.Voice))
         return Results.BadRequest(new ErrorResponse("INVALID_VOICE", "A voice is required."));
 
+    // A new session supersedes any in-flight one for this document: cancel the
+    // others so their synthesis stops (the reader jumped to a new position / speed)
+    // instead of wastefully competing for the GPU.
+    foreach (var other in sessions.ForDocument(id))
+        other.Cancellation.Cancel();
+
+    var startWord = Math.Max(0, body.StartWordIndex);
     var session = new TtsSession(Guid.NewGuid(), id, body.Voice, body.Speed,
         string.IsNullOrWhiteSpace(body.Language) ? "en" : body.Language, SessionStatus.Processing, 0);
-    sessions.Add(session);
+    sessions.Add(session, startWord);
     pipeline.Start(session.Id);
 
     return Results.Created($"/api/sessions/{session.Id}", session);

@@ -39,6 +39,8 @@ public sealed class StoredSession
 
     public required TtsSession Session { get; set; }
     public int TotalChunks { get; set; }
+    /// <summary>Source-word index where this session's synthesis begins.</summary>
+    public int StartWordIndex { get; init; }
     public CancellationTokenSource Cancellation { get; } = new();
 
     public void AddChunk(ProcessedChunk chunk)
@@ -59,8 +61,9 @@ public sealed class StoredSession
 
 public interface ISessionStore
 {
-    StoredSession Add(TtsSession session);
+    StoredSession Add(TtsSession session, int startWordIndex = 0);
     StoredSession? Get(Guid id);
+    IReadOnlyList<StoredSession> ForDocument(Guid documentId);
     void Update(Guid id, Func<TtsSession, TtsSession> mutate);
     bool Remove(Guid id);
 }
@@ -69,14 +72,17 @@ public sealed class InMemorySessionStore : ISessionStore
 {
     private readonly ConcurrentDictionary<Guid, StoredSession> _sessions = new();
 
-    public StoredSession Add(TtsSession session)
+    public StoredSession Add(TtsSession session, int startWordIndex = 0)
     {
-        var stored = new StoredSession { Session = session };
+        var stored = new StoredSession { Session = session, StartWordIndex = startWordIndex };
         _sessions[session.Id] = stored;
         return stored;
     }
 
     public StoredSession? Get(Guid id) => _sessions.GetValueOrDefault(id);
+
+    public IReadOnlyList<StoredSession> ForDocument(Guid documentId) =>
+        _sessions.Values.Where(s => s.Session.DocumentId == documentId).ToList();
 
     public void Update(Guid id, Func<TtsSession, TtsSession> mutate)
     {

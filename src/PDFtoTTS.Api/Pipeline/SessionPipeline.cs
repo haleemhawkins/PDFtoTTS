@@ -74,6 +74,14 @@ public sealed class SessionPipeline
             await SetStatus(sessionId, group, SessionStatus.Processing, ct);
 
             var tokens = _normalizer.Normalize(doc.Words);
+            // Begin at the requested source word: skip tokens that end before it,
+            // so the session synthesizes from the reader's position onward.
+            if (stored.StartWordIndex > 0)
+            {
+                int from = 0;
+                while (from < tokens.Count && tokens[from].SourceEnd < stored.StartWordIndex) from++;
+                if (from > 0) tokens = tokens.Skip(from).ToList();
+            }
             var chunks = new Chunker(_maxTokensPerChunk, _firstChunkTokens).Chunk(tokens);
             stored.TotalChunks = chunks.Count;
 
