@@ -4,6 +4,7 @@ interface Props {
   state: UiState;
   progress: number;
   speed: number;
+  onHome: () => void;
   onPlay: () => void;
   onPause: () => void;
   onSpeed: (speed: number) => void;
@@ -11,7 +12,7 @@ interface Props {
 
 const SPEEDS = [0.75, 1, 1.25, 1.5, 2];
 
-export function PlaybackBar({ state, progress, speed, onPlay, onPause, onSpeed }: Props) {
+export function PlaybackBar({ state, progress, speed, onHome, onPlay, onPause, onSpeed }: Props) {
   const isPlaying = state === "playing";
   const isProcessing = state === "processing";
   const canPlay = state !== "idle" && state !== "uploading" && state !== "error";
@@ -26,6 +27,10 @@ export function PlaybackBar({ state, progress, speed, onPlay, onPause, onSpeed }
 
   return (
     <div className="playback-bar">
+      <button className="home-btn" onClick={onHome} title="Back to upload">
+        🏠 Home
+      </button>
+
       <button onClick={isPlaying ? onPause : onPlay} disabled={!canPlay}>
         {isPlaying ? "⏸ Pause" : "▶ Play"}
       </button>

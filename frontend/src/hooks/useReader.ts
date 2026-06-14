@@ -17,7 +17,9 @@ export interface ReaderController {
   timeline: Timeline;
   activeIndex: number; // index into timeline.words, or -1
   error: string | null;
-  start: (file: File, voice: string, speed: number) => Promise<void>;
+  start: (file: File, voice: string, speed: number, startPage?: number) => Promise<void>;
+  /** Tear everything down and return to the idle (upload) state. */
+  reset: () => void;
   play: () => void;
   pause: () => void;
   setRate: (rate: number) => void;
@@ -124,21 +126,49 @@ export function useReader(): ReaderController {
     await connection.current.start();
   }, [onChunk]);
 
-  const start = useCallback(async (file: File, voice: string, speed: number) => {
-    try {
-      setError(null);
-      setState("uploading");
-      const doc = await api.uploadDocument(file);
-      docId.current = doc.id;
-      voiceRef.current = voice;
-      // Source words (with page) power position-aware jumps without re-fetching.
-      docWords.current = await api.getWords(doc.id).catch(() => []);
-      await openSession(voice, speed);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
-      setState("error");
+  const start = useCallback(
+    async (file: File, voice: string, speed: number, startPage = 1) => {
+      try {
+        setError(null);
+        setState("uploading");
+        const doc = await api.uploadDocument(file);
+        docId.current = doc.id;
+        voiceRef.current = voice;
+        // Source words (with page) power position-aware jumps without re-fetching.
+        docWords.current = await api.getWords(doc.id).catch(() => []);
+        const startWord = startPage > 1
+          ? (docWords.current.find((w) => w.page === startPage)?.index ?? 0)
+          : 0;
+        await openSession(voice, speed, startWord);
+      } catch (e) {
+        setError(e instanceof Error ? e.message : String(e));
+        setState("error");
+      }
+    },
+    [openSession],
+  );
+
+  // Tear down and return to the upload screen.
+  const reset = useCallback(() => {
+    void connection.current?.stop();
+    connection.current = null;
+    player.current?.dispose();
+    player.current = null;
+    if (raf.current !== null) {
+      cancelAnimationFrame(raf.current);
+      raf.current = null;
     }
-  }, [openSession]);
+    queue.current = new ChunkQueue<ProcessedChunk>();
+    docId.current = null;
+    docWords.current = [];
+    resumeSourceWord.current = null;
+    wasPlaying.current = false;
+    setTimeline(EMPTY_TIMELINE);
+    setActiveIndex(-1);
+    setProgress(0);
+    setError(null);
+    setState("idle");
+  }, []);
 
   const play = useCallback(() => {
     player.current?.play();
@@ -235,7 +265,7 @@ export function useReader(): ReaderController {
 
   return {
     state, progress, timeline, activeIndex, error,
-    start, play, pause, setRate, changeSpeed,
+    start, reset, play, pause, setRate, changeSpeed,
     seekToWord, jumpToWord, jumpToPage, seekToMs, getPositionMs,
   };
 }

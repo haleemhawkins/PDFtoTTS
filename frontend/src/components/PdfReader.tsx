@@ -19,20 +19,30 @@ interface Props {
   timeline: Timeline;
   activeIndex: number;
   scale?: number;
+  initialPage?: number;
   onJumpToWord: (sourceWordIndex: number) => void;
   onJumpToPage: (page: number) => void;
+  onPageChange?: (page: number) => void;
 }
 
-export function PdfReader({ file, timeline, activeIndex, scale = 1.5, onJumpToWord, onJumpToPage }: Props) {
+export function PdfReader({
+  file, timeline, activeIndex, scale = 1.5, initialPage = 1,
+  onJumpToWord, onJumpToPage, onPageChange,
+}: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const activeBoxRef = useRef<HTMLDivElement | null>(null);
   const lastManualScroll = useRef(0);
   const [pdf, setPdf] = useState<pdfjsLib.PDFDocumentProxy | null>(null);
-  const [page, setPage] = useState(1);
+  const [page, setPage] = useState(initialPage);
   const [viewport, setViewport] = useState<pdfjsLib.PageViewport | null>(null);
   const [overlays, setOverlays] = useState<OverlayBox[]>([]);
 
   const SCROLL_GRACE_MS = 2500;
+
+  // Report the visible page up so it can be persisted across reloads.
+  useEffect(() => {
+    onPageChange?.(page);
+  }, [page, onPageChange]);
 
   // Load the PDF document from the uploaded file.
   useEffect(() => {

@@ -47,6 +47,12 @@
   border-radius: 10px;
 }
 
+.home-btn {
+  background: transparent;
+  border: 1px solid #555;
+  white-space: nowrap;
+}
+
 .progress {
   flex: 1;
   height: 10px;
