@@ -4,6 +4,11 @@ import type { Voice } from "../api/types";
 
 interface Props {
   busy: boolean;
+  /** Optional phase message shown while busy (e.g. OCR of a scanned PDF). */
+  statusText?: string;
+  /** OCR/extraction progress in [0,1]; undefined hides the bar. A value of 0
+   *  renders an indeterminate (animated) bar until the first page is reported. */
+  progress?: number;
   onStart: (file: File, voice: string, speed: number) => void;
 }
 
@@ -12,7 +17,7 @@ const FALLBACK_VOICES: Voice[] = [
   { id: "am_adam", label: "Adam (US, male)", language: "en-us", gender: "male" },
 ];
 
-export function UploadView({ busy, onStart }: Props) {
+export function UploadView({ busy, statusText, progress, onStart }: Props) {
   const [voices, setVoices] = useState<Voice[]>(FALLBACK_VOICES);
   const [voice, setVoice] = useState("af_heart");
   const [speed, setSpeed] = useState(1);
@@ -66,6 +71,20 @@ export function UploadView({ busy, onStart }: Props) {
       <button onClick={handleStart} disabled={busy}>
         {busy ? "Starting…" : "Start reading"}
       </button>
+
+      {busy && statusText && <p className="upload-status">{statusText}</p>}
+
+      {busy && progress != null && (
+        <div className="ocr-progress" role="progressbar" aria-valuemin={0} aria-valuemax={1}
+             aria-valuenow={progress > 0 ? progress : undefined}>
+          <div className={"ocr-progress-track" + (progress > 0 ? "" : " indeterminate")}>
+            <div className="ocr-progress-fill" style={progress > 0 ? { width: `${Math.round(progress * 100)}%` } : undefined} />
+          </div>
+          <span className="ocr-progress-label">
+            {progress > 0 ? `${Math.round(progress * 100)}%` : "Starting…"}
+          </span>
+        </div>
+      )}
     </div>
   );
 }

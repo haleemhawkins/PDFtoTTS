@@ -51,7 +51,10 @@
 }
 
 #root {
-  width: 1126px;
+  /* Mobile-first: fill the viewport. (Was a leftover fixed 1126px from the Vite
+     starter — a desktop-fixed width can confuse WebKit's shrink-to-fit and zoom
+     the whole PWA out.) Desktop width is handled by .app's max-width. */
+  width: 100%;
   max-width: 100%;
   margin: 0 auto;
   text-align: center;
@@ -62,8 +65,12 @@
   box-sizing: border-box;
 }
 
+html,
 body {
   margin: 0;
+  /* A stray wide child must never widen the document — on iOS a horizontal
+     overflow makes the browser shrink-to-fit (the whole UI "zooms out"). */
+  overflow-x: hidden;
 }
 
 h1,

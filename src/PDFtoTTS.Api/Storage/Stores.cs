@@ -8,13 +8,21 @@ namespace PDFtoTTS.Api.Storage;
 public sealed class StoredDocument
 {
     public required Document Document { get; set; }
-    public required IReadOnlyList<SourceWord> Words { get; init; }
+    /// <summary>Mutable: starts empty while a document is <c>Extracting</c> and is
+    /// filled once extraction (and any OCR fallback) completes.</summary>
+    public IReadOnlyList<SourceWord> Words { get; set; } = Array.Empty<SourceWord>();
 }
 
 public interface IDocumentStore
 {
     StoredDocument Add(Document document, IReadOnlyList<SourceWord> words);
     StoredDocument? Get(Guid id);
+    /// <summary>Publish the extraction result (or failure): updates the document
+    /// record and its words atomically once the background pipeline finishes.</summary>
+    void SetExtraction(Guid id, Document document, IReadOnlyList<SourceWord> words);
+    /// <summary>Update just the extraction/OCR progress (0..1) so the client's
+    /// "Preparing document…" bar advances while a scanned PDF is OCR'd.</summary>
+    void SetProgress(Guid id, double progress);
 }
 
 public sealed class InMemoryDocumentStore : IDocumentStore
@@ -29,6 +37,19 @@ public sealed class InMemoryDocumentStore : IDocumentStore
     }
 
     public StoredDocument? Get(Guid id) => _docs.GetValueOrDefault(id);
+
+    public void SetExtraction(Guid id, Document document, IReadOnlyList<SourceWord> words)
+    {
+        if (!_docs.TryGetValue(id, out var stored)) return;
+        stored.Document = document;
+        stored.Words = words;
+    }
+
+    public void SetProgress(Guid id, double progress)
+    {
+        if (!_docs.TryGetValue(id, out var stored)) return;
+        stored.Document = stored.Document with { Progress = Math.Clamp(progress, 0, 1) };
+    }
 }
 
 /// <summary>A session plus its accumulated processed chunks and progress.</summary>

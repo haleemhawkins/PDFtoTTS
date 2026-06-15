@@ -15,6 +15,13 @@ RUN dotnet publish src/PDFtoTTS.Api/PDFtoTTS.Api.csproj -c Release -o /app/publi
 
 FROM mcr.microsoft.com/dotnet/aspnet:10.0 AS runtime
 WORKDIR /app
+
+# ocrmypdf + Tesseract (English) so scanned/image-only PDFs get a searchable text
+# layer added server-side before extraction. Pulls ghostscript/qpdf/unpaper as deps.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ocrmypdf tesseract-ocr-eng \
+    && rm -rf /var/lib/apt/lists/*
+
 COPY --from=build /app/publish .
 
 ENV ASPNETCORE_URLS=http://+:8080 \

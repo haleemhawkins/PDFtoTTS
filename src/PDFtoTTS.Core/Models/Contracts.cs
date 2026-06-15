@@ -59,13 +59,16 @@ public sealed record ProcessedChunk(
     bool Degraded = false);
 
 /// <summary>An uploaded document and its extraction status.</summary>
+/// <param name="Progress">Extraction/OCR progress in [0,1] while <see cref="DocumentStatus.Extracting"/>.
+/// Drives the client's "Preparing document…" progress bar; 0 when not OCR'ing.</param>
 public sealed record Document(
     Guid Id,
     string Filename,
     DocumentType Type,
     int PageCount,
     int WordCount,
-    DocumentStatus Status);
+    DocumentStatus Status,
+    double Progress = 0);
 
 /// <summary>A TTS render session over a document with chosen voice/speed.</summary>
 public sealed record TtsSession(

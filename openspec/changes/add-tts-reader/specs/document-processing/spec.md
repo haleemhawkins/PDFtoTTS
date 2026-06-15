@@ -28,6 +28,38 @@ increasing zero-based document word index.
   line-break-hyphenated word is rejoined into a single `WordData` spanning both
   fragments' bounding boxes
 
+### Requirement: Running header, footer, and page-number removal
+
+The system SHALL omit running headers, running footers, and page numbers from
+the extracted PDF word stream so the TTS reads body content the way a person
+would, while preserving genuine headings (including chapter-only pages). The
+discriminator SHALL be recurrence and margin position, not appearance: a line in
+a page's top/bottom margin band whose normalized signature (lowercased,
+whitespace-collapsed, digit-runs replaced) recurs across a meaningful share of
+pages is treated as boilerplate, whereas a line that appears once is kept.
+Additionally, a margin line that is solely a page number (bare digits or a valid
+roman numeral, optionally labelled "Page"/"p." or wrapped in dashes/brackets)
+SHALL be removed regardless of recurrence.
+
+#### Scenario: Recurring running header is dropped, body kept
+
+- **WHEN** the same chapter-title line appears in the top margin of many pages
+- **THEN** those header words are removed from the extracted stream while the
+  body words of each page are retained in reading order
+
+#### Scenario: Unique heading and chapter-only pages are read
+
+- **WHEN** a heading appears on a single page (e.g. a chapter-only page) — even in
+  the top/bottom margin band
+- **THEN** it is NOT classified as boilerplate and its words are kept and read
+
+#### Scenario: Page numbers are removed
+
+- **WHEN** a margin line consists only of a page number — arabic ("42", "Page 42",
+  "— 42 —") or roman ("xiv"), including on short documents
+- **THEN** that line is removed, while a numeric-looking real word (e.g. "did",
+  "mill") in the body is never mistaken for a page number
+
 ### Requirement: EPUB text extraction with word position mapping
 
 The system SHALL extract reading-order text from EPUB documents using EpubNet,

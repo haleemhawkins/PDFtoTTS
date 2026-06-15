@@ -67,3 +67,12 @@
 - [x] 8.1 `openspec validate add-tts-reader --strict` passes.
 - [x] 8.2 README run instructions (Arch + ROCm prerequisites, `HSA_OVERRIDE`, first-run model download).
 - [ ] 8.3 Resolve design Open Questions (default voice, in-memory vs SQLite, multi-language scope, cleanup TTL).
+
+## 9. Reader UX refinements (post-plan, from real-device use)
+
+- [x] 9.1 Running header/footer/page-number removal in PDF extraction: recurrence + margin-band detection, plus a bare page-number rule (arabic/roman). Unit-tested in `PdfTextProcessing`.
+- [x] 9.2 Explicit-start playback: play control disabled until audio at the current position is buffered; loading→ready cue; no auto-play on first-ready, chunk-arrival-while-paused, restore, or navigation.
+- [x] 9.3 Resume position across backgrounding (clean pause on visibility/interruption, no auto-resume) and exact-word persistence across full reload.
+- [x] 9.4 Manual navigation (Prev/Next, drawer) positions + preloads the page paused, debounced; playback-driven page turns keep reading.
+- [x] 9.5 Page/chapter navigation drawer: lazy page thumbnails + PDF outline chapters resolving to pages.
+- [x] 9.6 Immersive, low-chrome reading: merged transport bar + auto-hide chrome on a tap.

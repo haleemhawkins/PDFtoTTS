@@ -54,6 +54,8 @@ builder.Services.AddSingleton<ChunkMerger>();
 builder.Services.AddSingleton<SynthesisOrchestrator>();
 builder.Services.AddSingleton<PdfExtractor>();
 builder.Services.AddSingleton<EpubExtractor>();
+builder.Services.AddSingleton<PDFtoTTS.Api.Documents.PdfOcr>();
+builder.Services.AddSingleton<DocumentPipeline>();
 
 // Storage + pipeline runner.
 string dataDir = builder.Configuration["DATA_DIR"]
@@ -70,7 +72,7 @@ var app = builder.Build();
 // --- Documents ------------------------------------------------------------
 
 app.MapPost("/api/documents", async (IFormFile file, IFileStorage files, IDocumentStore docs,
-    PdfExtractor pdf, EpubExtractor epub, ILogger<Program> logger, CancellationToken ct) =>
+    DocumentPipeline pipeline, CancellationToken ct) =>
 {
     if (file is null || file.Length == 0)
         return Results.BadRequest(new ErrorResponse("EMPTY_FILE", "No file uploaded."));
@@ -84,23 +86,15 @@ app.MapPost("/api/documents", async (IFormFile file, IFileStorage files, IDocume
         return Results.Json(new ErrorResponse("UNSUPPORTED_FORMAT",
             "Only PDF and EPUB are supported."), statusCode: StatusCodes.Status415UnsupportedMediaType);
 
-    ExtractionResult extraction;
-    try
-    {
-        extraction = type == DocumentType.Pdf ? pdf.Extract(bytes) : epub.Extract(bytes);
-    }
-    catch (Exception ex)
-    {
-        logger.LogError(ex, "Extraction failed for {FileName} ({Type})", file.FileName, type);
-        return Results.UnprocessableEntity(new ErrorResponse("UNREADABLE_DOCUMENT", ex.Message));
-    }
-
+    // Extraction (and OCR for scanned PDFs) can take minutes, so it runs in the
+    // background: persist the original, return an Extracting document immediately,
+    // and let the client poll GET /api/documents/{id} until Ready or Error.
     var id = Guid.NewGuid();
-    await files.SaveOriginalAsync(id, FileTypeDetector.Extension(type.Value), new MemoryStream(bytes), ct);
+    string rel = await files.SaveOriginalAsync(id, FileTypeDetector.Extension(type.Value), new MemoryStream(bytes), ct);
 
-    var document = new Document(id, file.FileName, type.Value,
-        extraction.PageCount, extraction.Words.Count, DocumentStatus.Ready);
-    docs.Add(document, extraction.Words);
+    var document = new Document(id, file.FileName, type.Value, 0, 0, DocumentStatus.Extracting);
+    docs.Add(document, Array.Empty<PDFtoTTS.Core.TextPipeline.SourceWord>());
+    pipeline.Start(document, rel);
 
     return Results.Created($"/api/documents/{id}", document);
 }).DisableAntiforgery();
@@ -116,8 +110,11 @@ app.MapGet("/api/documents/{id:guid}/words", (Guid id, IDocumentStore docs) =>
 app.MapPost("/api/documents/{id:guid}/sessions", (Guid id, CreateSessionRequest body,
     IDocumentStore docs, ISessionStore sessions, SessionPipeline pipeline) =>
 {
-    if (docs.Get(id) is null)
+    if (docs.Get(id) is not { } stored)
         return Results.NotFound(new ErrorResponse("DOCUMENT_NOT_FOUND", $"No document {id}."));
+    if (stored.Document.Status != DocumentStatus.Ready)
+        return Results.Conflict(new ErrorResponse("DOCUMENT_NOT_READY",
+            $"Document is still {stored.Document.Status}."));
     if (string.IsNullOrWhiteSpace(body.Voice))
         return Results.BadRequest(new ErrorResponse("INVALID_VOICE", "A voice is required."));
 

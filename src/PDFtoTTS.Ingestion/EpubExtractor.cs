@@ -2,6 +2,7 @@ using AngleSharp.Dom;
 using AngleSharp.Html.Parser;
 using PDFtoTTS.Core.TextPipeline;
 using VersOne.Epub;
+using VersOne.Epub.Options;
 
 namespace PDFtoTTS.Ingestion;
 
@@ -17,12 +18,19 @@ namespace PDFtoTTS.Ingestion;
 /// </summary>
 public sealed class EpubExtractor
 {
-    public ExtractionResult Extract(string path) => ExtractCore(EpubReader.ReadBook(path));
+    // Real-world EPUBs frequently violate the spec in several ways at once (a spine
+    // item missing from the manifest, a manifest entry pointing at an absent file,
+    // etc.). The STRICT default — and even RELAXED — throws on the first such error
+    // and the book never opens. We only need the reading-order text, so suppress
+    // all validation and salvage whatever content is present.
+    private const EpubReaderOptionsPreset Options = EpubReaderOptionsPreset.IGNORE_ALL_ERRORS;
+
+    public ExtractionResult Extract(string path) => ExtractCore(EpubReader.ReadBook(path, Options));
 
     public ExtractionResult Extract(byte[] bytes)
     {
         using var ms = new MemoryStream(bytes);
-        return ExtractCore(EpubReader.ReadBook(ms));
+        return ExtractCore(EpubReader.ReadBook(ms, Options));
     }
 
     private static ExtractionResult ExtractCore(EpubBook book)

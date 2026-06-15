@@ -20,6 +20,13 @@ export class AudioQueuePlayer {
 
   onUnderrun?: () => void;
   onResumed?: () => void;
+  /** Fired when the chunk at the current cursor is buffered, i.e. playback can
+   *  start emitting audio immediately. Drives enabling the Play button. */
+  onReady?: () => void;
+  /** Fired when the OS interrupts/suspends the context mid-playback (backgrounding
+   *  a PWA, an incoming call). We capture the position and stop cleanly so resume
+   *  is an explicit Play tap from exactly where we left off — never auto-restart. */
+  onInterrupted?: () => void;
 
   constructor() {
     this.ctx = new AudioContext();
@@ -29,6 +36,19 @@ export class AudioQueuePlayer {
     // us opt into the "playback" category so audio plays regardless, like video.
     const nav = navigator as Navigator & { audioSession?: { type: string } };
     if (nav.audioSession) nav.audioSession.type = "playback";
+
+    // iOS interrupts/suspends the AudioContext when the PWA is backgrounded. The
+    // playing source ends and our cursor would otherwise run out the buffer while
+    // `playing` stayed true — leaving Play a no-op and freshly-synthesized chunks
+    // auto-starting on return. Treat any interruption-while-playing as a clean
+    // pause so the position is captured and resume waits for an explicit tap.
+    this.ctx.onstatechange = () => {
+      const s = this.ctx.state as string;
+      if (this.playing && (s === "interrupted" || s === "suspended")) {
+        this.pause();
+        this.onInterrupted?.();
+      }
+    };
   }
 
   /** Decode and buffer a chunk; recover from an underrun if we were waiting on it. */
@@ -36,6 +56,7 @@ export class AudioQueuePlayer {
     this.durationsMs.set(chunkIndex, durationMs);
     const data = await fetch(url).then((r) => r.arrayBuffer());
     this.buffers.set(chunkIndex, await this.decode(data));
+    if (chunkIndex === this.cursor) this.onReady?.();
     if (this.playing && this.source === null && chunkIndex === this.cursor) {
       this.onResumed?.();
       this.startCurrent(this.chunkStartOffsetMs);
@@ -103,6 +124,8 @@ export class AudioQueuePlayer {
     // Always record the within-chunk offset so play()/underrun recovery resume
     // exactly at the seeked word, even if the target chunk isn't decoded yet.
     this.chunkStartOffsetMs = globalMs - offset;
+    // Re-evaluate readiness for the new cursor: ready iff its audio is buffered.
+    if (this.buffers.has(this.cursor)) this.onReady?.();
     if (this.playing) this.startCurrent(this.chunkStartOffsetMs);
   }
 

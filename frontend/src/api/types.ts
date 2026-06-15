@@ -46,6 +46,8 @@ export interface DocumentInfo {
   pageCount: number;
   wordCount: number;
   status: DocumentStatus;
+  /** Extraction/OCR progress in [0,1] while status is "Extracting" (0 when not OCR'ing). */
+  progress?: number;
 }
 
 export interface TtsSession {

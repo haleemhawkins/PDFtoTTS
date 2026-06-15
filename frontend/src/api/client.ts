@@ -20,6 +20,30 @@ export async function uploadDocument(file: File): Promise<DocumentInfo> {
   return asJson(await fetch("/api/documents", { method: "POST", body: form }));
 }
 
+export async function getDocument(id: string): Promise<DocumentInfo> {
+  return asJson(await fetch(`/api/documents/${id}`));
+}
+
+/** Poll the document until extraction (and any OCR) finishes. Resolves on Ready,
+ *  throws on Error or timeout. Scanned PDFs are OCR'd server-side, which can take
+ *  minutes, so this waits patiently. */
+export async function waitForDocumentReady(
+  id: string,
+  onTick?: (doc: DocumentInfo) => void,
+  { intervalMs = 1500, timeoutMs = 30 * 60 * 1000 } = {},
+): Promise<DocumentInfo> {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    const doc = await getDocument(id);
+    onTick?.(doc);
+    if (doc.status === "Ready") return doc;
+    if (doc.status === "Error")
+      throw new Error("Couldn't read this document — no selectable text found (a scanned PDF that OCR couldn't recover).");
+    if (Date.now() > deadline) throw new Error("Timed out preparing this document.");
+    await new Promise((r) => setTimeout(r, intervalMs));
+  }
+}
+
 export async function createSession(
   documentId: string,
   voice: string,

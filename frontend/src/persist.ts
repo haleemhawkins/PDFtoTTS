@@ -11,6 +11,9 @@ export interface SessionMeta {
   voice: string;
   speed: number;
   page: number;
+  /** Source-document word index last being read, so a full reload (iOS often kills
+   *  a backgrounded PWA) resumes at the exact word, not just the top of the page. */
+  word?: number;
 }
 
 function openDb(): Promise<IDBDatabase> {
@@ -81,6 +84,11 @@ export function loadMeta(): SessionMeta | null {
 export function updateSavedPage(page: number): void {
   const meta = loadMeta();
   if (meta && meta.page !== page) saveMeta({ ...meta, page });
+}
+
+export function updateSavedWord(word: number): void {
+  const meta = loadMeta();
+  if (meta && meta.word !== word) saveMeta({ ...meta, word });
 }
 
 export function patchMeta(partial: Partial<SessionMeta>): void {

@@ -89,6 +89,13 @@ public class CheckpointDIntegrationTests
         Assert.Equal(HttpStatusCode.Created, uploadResp.StatusCode);
         var doc = await uploadResp.Content.ReadFromJsonAsync<DocDto>();
         Assert.NotNull(doc);
+
+        // Extraction runs in the background; poll the document until it's Ready.
+        for (int i = 0; i < 100 && doc!.Status is "Queued" or "Extracting"; i++)
+        {
+            await Task.Delay(50);
+            doc = await client.GetFromJsonAsync<DocDto>($"/api/documents/{doc.Id}");
+        }
         Assert.Equal("Ready", doc!.Status);
         Assert.Equal(8, doc.WordCount); // "Sentence X." × 4 → 8 words
 

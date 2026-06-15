@@ -1,9 +1,6 @@
-import { useEffect, useRef, useState } from "react";
-import * as pdfjsLib from "pdfjs-dist";
-import workerUrl from "pdfjs-dist/build/pdf.worker.min.mjs?url";
-import type { Timeline, TimelineWord } from "../sync/wordTimeline";
-
-pdfjsLib.GlobalWorkerOptions.workerSrc = workerUrl;
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import type { PdfDoc } from "../pdf/usePdfDocument";
+import type { Timeline } from "../sync/wordTimeline";
 
 interface OverlayBox {
   timelineIndex: number;
@@ -15,27 +12,36 @@ interface OverlayBox {
 }
 
 interface Props {
-  file: File;
+  pdf: PdfDoc;
   timeline: Timeline;
   activeIndex: number;
   scale?: number;
   initialPage?: number;
+  /** External navigation command (chrome pager / drawer): bumping the seq jumps
+   *  to gotoPage. */
+  gotoSeq: number;
+  gotoPage: number;
   onJumpToWord: (sourceWordIndex: number) => void;
-  onJumpToPage: (page: number) => void;
   onPageChange?: (page: number) => void;
+  onToggleChrome: () => void;
 }
 
 export function PdfReader({
-  file, timeline, activeIndex, scale = 1.5, initialPage = 1,
-  onJumpToWord, onJumpToPage, onPageChange,
+  pdf, timeline, activeIndex, scale = 1.5, initialPage = 1,
+  gotoSeq, gotoPage,
+  onJumpToWord, onPageChange, onToggleChrome,
 }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const containerRef = useRef<HTMLDivElement>(null);
   const activeBoxRef = useRef<HTMLDivElement | null>(null);
   const lastManualScroll = useRef(0);
-  const [pdf, setPdf] = useState<pdfjsLib.PDFDocumentProxy | null>(null);
+  // The last activeIndex we auto-scrolled to — so an overlay rebuild (chunk /
+  // page-turn) can tell "the active word changed" from "same word, boxes redrawn".
+  const lastScrolledIndex = useRef(-1);
   const [page, setPage] = useState(initialPage);
-  const [viewport, setViewport] = useState<pdfjsLib.PageViewport | null>(null);
+  const [viewport, setViewport] = useState<import("pdfjs-dist").PageViewport | null>(null);
   const [overlays, setOverlays] = useState<OverlayBox[]>([]);
+  const [containerWidth, setContainerWidth] = useState(0);
 
   const SCROLL_GRACE_MS = 2500;
 
@@ -44,24 +50,36 @@ export function PdfReader({
     onPageChange?.(page);
   }, [page, onPageChange]);
 
-  // Load the PDF document from the uploaded file.
+  // External navigation (a thumbnail / chapter pick): show that page. The seq
+  // bumps even when re-picking the same page, so it always takes effect.
   useEffect(() => {
-    let cancelled = false;
-    file.arrayBuffer().then(async (buf) => {
-      const doc = await pdfjsLib.getDocument({ data: buf }).promise;
-      if (!cancelled) setPdf(doc);
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [file]);
+    if (gotoSeq > 0) setPage(gotoPage);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [gotoSeq]);
 
-  // Render the page canvas. Depends ONLY on pdf/page/scale — never on the
-  // timeline — so streaming chunks don't thrash the render and blank the canvas.
-  // The in-flight render task is cancelled on change to avoid pdfjs "canvas in
-  // use" conflicts (e.g. React StrictMode double-invoke).
+  // Measure the available width BEFORE first paint (useLayoutEffect) so the page
+  // renders fit-to-width immediately — never a momentary full-size render that
+  // overflows the viewport and makes a mobile browser shrink-to-fit ("zoom out").
+  useLayoutEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    const update = () => setContainerWidth(el.clientWidth);
+    update();
+    const ro = new ResizeObserver(update);
+    ro.observe(el);
+    window.addEventListener("orientationchange", update);
+    return () => {
+      ro.disconnect();
+      window.removeEventListener("orientationchange", update);
+    };
+  }, []);
+
+  // Render the page canvas. Depends on pdf/page/scale and the measured width —
+  // never on the timeline — so streaming chunks don't thrash the render. The
+  // in-flight render task is cancelled on change to avoid pdfjs "canvas in use"
+  // conflicts (e.g. React StrictMode double-invoke).
   useEffect(() => {
-    if (!pdf) return;
+    if (!containerWidth) return; // wait until measured — avoid a full-size flash
     let cancelled = false;
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     let task: any = null;
@@ -69,16 +87,32 @@ export function PdfReader({
     (async () => {
       const pdfPage = await pdf.getPage(page);
       if (cancelled) return;
-      const vp = pdfPage.getViewport({ scale });
       const canvas = canvasRef.current;
       if (!canvas) return;
 
-      canvas.width = vp.width;
-      canvas.height = vp.height;
+      // Fit the page to the available WIDTH so it fills the screen at a readable
+      // zoom (tall pages scroll vertically). PDF text is vector, so up-scaling
+      // stays crisp — the `scale` cap exists only so a small page isn't blown up
+      // huge on a WIDE desktop container. On a narrow screen (phone/PWA) we
+      // ALWAYS fill the width, otherwise a small-page PDF renders as a tiny
+      // island with big margins (looks "zoomed out"). The CSS-px viewport drives
+      // the overlay; the canvas is rendered at devicePixelRatio for crisp retina.
+      const base = pdfPage.getViewport({ scale: 1 });
+      const fitToWidth = (containerWidth - 2) / base.width;
+      const narrow = containerWidth <= 760; // phone / small tablet portrait
+      const fit = Math.max(0.4, narrow ? fitToWidth : Math.min(scale, fitToWidth));
+      const vp = pdfPage.getViewport({ scale: fit });
+      const dpr = Math.min(window.devicePixelRatio || 1, 2);
+
+      canvas.width = Math.round(vp.width * dpr);
+      canvas.height = Math.round(vp.height * dpr);
+      canvas.style.width = `${vp.width}px`;
+      canvas.style.height = `${vp.height}px`;
       const ctx = canvas.getContext("2d");
       if (!ctx) return;
 
-      task = pdfPage.render({ canvasContext: ctx, viewport: vp, canvas });
+      const renderVp = dpr === 1 ? vp : pdfPage.getViewport({ scale: fit * dpr });
+      task = pdfPage.render({ canvasContext: ctx, viewport: renderVp, canvas });
       try {
         await task.promise;
       } catch (e) {
@@ -92,7 +126,7 @@ export function PdfReader({
       cancelled = true;
       task?.cancel?.();
     };
-  }, [pdf, page, scale]);
+  }, [pdf, page, scale, containerWidth]);
 
   // Recompute overlay boxes for the current page when the viewport or the
   // streamed words change. This is cheap and independent of canvas rendering.
@@ -139,25 +173,31 @@ export function PdfReader({
     };
   }, []);
 
-  // Keep the active word in view, unless the user scrolled recently.
+  // Keep the active word in view, unless the user scrolled recently. Also depend
+  // on `overlays`: when playback turns the page, the active word's box for the NEW
+  // page doesn't exist yet on the render where activeIndex changes (the canvas
+  // re-renders async, then overlays rebuild) — so keying on activeIndex alone left
+  // the highlight off-screen until the next word.
+  //   - When the active word CHANGES, re-center it (smooth, continuous following).
+  //   - When only `overlays` rebuilt (a page-turn settling, or a streamed chunk),
+  //     scroll only if the active word is actually off-screen. That brings the
+  //     highlight onto a freshly-turned page, without a chunk arriving while paused
+  //     yanking the page away from where the user is reading.
   useEffect(() => {
     if (Date.now() - lastManualScroll.current < SCROLL_GRACE_MS) return;
-    activeBoxRef.current?.scrollIntoView({ block: "center", behavior: "smooth" });
-  }, [activeIndex]);
-
-  // Manual page jump: show the page and read from its first word — synthesizing
-  // from there if needed, so jumping ahead doesn't wait for earlier pages.
-  const goToPage = (target: number) => {
-    if (!pdf || target < 1 || target > pdf.numPages) return;
-    setPage(target);
-    onJumpToPage(target);
-  };
-
-  const activeWord: TimelineWord | undefined = timeline.words[activeIndex];
+    const el = activeBoxRef.current;
+    if (!el) return;
+    const activeChanged = lastScrolledIndex.current !== activeIndex;
+    lastScrolledIndex.current = activeIndex;
+    const r = el.getBoundingClientRect();
+    const offscreen = r.top < 0 || r.bottom > window.innerHeight;
+    if (activeChanged || offscreen) el.scrollIntoView({ block: "center", behavior: "smooth" });
+  }, [activeIndex, overlays]);
 
   return (
-    <div className="pdf-reader">
-      <div className="pdf-stage" style={{ position: "relative" }}>
+    <div className="pdf-reader" ref={containerRef}>
+      {/* Tapping the page background toggles the chrome (immersive reading). */}
+      <div className="pdf-stage" style={{ position: "relative" }} onClick={onToggleChrome}>
         <canvas ref={canvasRef} />
         <div className="word-overlay">
           {overlays.map((b) => (
@@ -166,23 +206,13 @@ export function PdfReader({
               ref={b.timelineIndex === activeIndex ? activeBoxRef : undefined}
               className={"word-box" + (b.timelineIndex === activeIndex ? " active" : "")}
               style={{ left: b.left, top: b.top, width: b.width, height: b.height }}
-              onClick={() => onJumpToWord(b.wordIndex)}
+              onClick={(e) => {
+                e.stopPropagation(); // don't also toggle chrome
+                onJumpToWord(b.wordIndex);
+              }}
             />
           ))}
         </div>
-      </div>
-      <div className="pdf-pager">
-        <button onClick={() => goToPage(page - 1)} disabled={page <= 1}>
-          ‹ Prev
-        </button>
-        <span>
-          Page {page}
-          {pdf ? ` / ${pdf.numPages}` : ""}
-          {activeWord ? ` — “${activeWord.text}”` : ""}
-        </span>
-        <button onClick={() => goToPage(page + 1)} disabled={!pdf || page >= pdf.numPages}>
-          Next ›
-        </button>
       </div>
     </div>
   );
