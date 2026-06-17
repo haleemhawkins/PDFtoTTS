@@ -65,7 +65,11 @@ public sealed class Chunker
             }
 
             var slice = tokens.Skip(i).Take(breakAt - i).ToList();
-            string text = string.Join(" ", slice.Select(t => t.Text));
+            // Re-attach sentence terminators stripped during normalization so the
+            // voice gets period/question intonation and the worker inserts a pause
+            // after each sentence (not just at chunk ends). '.' is the fallback when
+            // a boundary is known but the exact mark wasn't recorded.
+            string text = string.Join(" ", slice.Select(RenderToken));
             chunks.Add(new Chunk(
                 Index: chunks.Count,
                 Text: text,
@@ -79,6 +83,15 @@ public sealed class Chunker
         }
 
         return chunks;
+    }
+
+    // Token text with its sentence terminator re-attached. Commas/colons survive
+    // normalization already; only '.'/'?'/'!' were peeled into the flag.
+    private static string RenderToken(NormToken t)
+    {
+        if (!t.EndsSentence) return t.Text;
+        char mark = t.Terminator == '\0' ? '.' : t.Terminator;
+        return t.Text + mark;
     }
 
     /// <summary>

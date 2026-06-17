@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using PDFtoTTS.Api.Documents;
+using PDFtoTTS.Api.Grpc;
 using PDFtoTTS.Api.Storage;
 using PDFtoTTS.Core.Models;
 using PDFtoTTS.Ingestion;
@@ -19,6 +20,7 @@ public sealed class DocumentPipeline
     private readonly PdfExtractor _pdf;
     private readonly EpubExtractor _epub;
     private readonly PdfOcr _ocr;
+    private readonly IOcrEngine _surya;
     private readonly ILogger<DocumentPipeline> _logger;
     private readonly ConcurrentDictionary<Guid, Task> _running = new();
 
@@ -28,6 +30,7 @@ public sealed class DocumentPipeline
         PdfExtractor pdf,
         EpubExtractor epub,
         PdfOcr ocr,
+        IOcrEngine surya,
         ILogger<DocumentPipeline> logger)
     {
         _documents = documents;
@@ -35,6 +38,7 @@ public sealed class DocumentPipeline
         _pdf = pdf;
         _epub = epub;
         _ocr = ocr;
+        _surya = surya;
         _logger = logger;
     }
 
@@ -51,10 +55,9 @@ public sealed class DocumentPipeline
                 ? _epub.Extract(path)
                 : _pdf.Extract(path);
 
-            // A PDF with pages but no words is a scanned/image PDF: OCR it to add a
-            // text layer, then re-extract through the same path (positions intact).
+            // A PDF with pages but no words is a scanned/image PDF: OCR it.
             if (doc.Type == DocumentType.Pdf && result.Words.Count == 0 && result.PageCount > 0)
-                result = await OcrAndReExtract(doc, path);
+                result = await OcrScanned(doc, originalRelPath, path);
 
             if (result.Words.Count == 0)
             {
@@ -81,7 +84,35 @@ public sealed class DocumentPipeline
         }
     }
 
-    private async Task<ExtractionResult> OcrAndReExtract(Document doc, string path)
+    // OCR a scanned PDF. Prefer the Surya GPU engine (far higher accuracy + reading
+    // order, returns positioned words directly); fall back to ocrmypdf/Tesseract when
+    // Surya is disabled or unreachable so scans still work without the GPU worker.
+    private async Task<ExtractionResult> OcrScanned(Document doc, string relPath, string path)
+    {
+        if (_surya.Enabled)
+        {
+            try
+            {
+                _logger.LogInformation("Document {DocumentId} has no text; running Surya OCR", doc.Id);
+                var result = await _surya.RecognizeAsync(relPath, "en", CancellationToken.None);
+                if (result.Words.Count > 0)
+                {
+                    _logger.LogInformation("Surya OCR produced {Words} words for {DocumentId}",
+                        result.Words.Count, doc.Id);
+                    return result;
+                }
+                _logger.LogWarning("Surya OCR returned no words for {DocumentId}; trying ocrmypdf", doc.Id);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Surya OCR failed for {DocumentId}; falling back to ocrmypdf", doc.Id);
+            }
+        }
+
+        return await OcrmypdfAndReExtract(doc, path);
+    }
+
+    private async Task<ExtractionResult> OcrmypdfAndReExtract(Document doc, string path)
     {
         if (!_ocr.Available)
         {
@@ -89,7 +120,7 @@ public sealed class DocumentPipeline
             return new ExtractionResult(Array.Empty<Core.TextPipeline.SourceWord>(), 0);
         }
 
-        _logger.LogInformation("Document {DocumentId} has no text; running OCR", doc.Id);
+        _logger.LogInformation("Document {DocumentId}: running ocrmypdf", doc.Id);
         string ocrPath = path + ".ocr.pdf";
         // Surface page-by-page OCR progress to the client's "Preparing document…" bar.
         var progress = new Progress<double>(p => _documents.SetProgress(doc.Id, p));

@@ -15,6 +15,10 @@ public sealed class PdfOcr
     private readonly ILogger<PdfOcr> _logger;
     private readonly string _language;
     private readonly int _timeoutSeconds;
+    private readonly bool _deskew;
+    private readonly bool _rotatePages;
+    private readonly bool _clean;
+    private readonly int _oversample;
     private readonly Lazy<bool> _available;
 
     public PdfOcr(ILogger<PdfOcr> logger, IConfiguration config)
@@ -24,6 +28,15 @@ public sealed class PdfOcr
         // Whole-document OCR of a long scan is minutes of CPU work; bound it so a
         // pathological file can't pin the box forever.
         _timeoutSeconds = config.GetValue("OCR_TIMEOUT_SECONDS", 1800);
+        // Image preprocessing that improves OCR accuracy. Deskew (straighten tilted
+        // scans) and rotate-pages (fix sideways/upside-down pages) are cheap and
+        // high-impact, so they default on. Clean (unpaper denoise of the OCR input
+        // image — the visible page is unchanged) and oversampling low-DPI pages cost
+        // more time, so they're opt-in via env.
+        _deskew = config.GetValue("OCR_DESKEW", true);
+        _rotatePages = config.GetValue("OCR_ROTATE_PAGES", true);
+        _clean = config.GetValue("OCR_CLEAN", false);
+        _oversample = config.GetValue("OCR_OVERSAMPLE", 0);
         _available = new Lazy<bool>(() => ResolveOnPath("ocrmypdf") is not null);
     }
 
@@ -63,6 +76,15 @@ public sealed class PdfOcr
         // safe speedup on the path to first audio.
         psi.ArgumentList.Add("--output-type");
         psi.ArgumentList.Add("pdf");
+        // Accuracy preprocessing (see ctor). rotate-pages needs the osd model.
+        if (_rotatePages) psi.ArgumentList.Add("--rotate-pages");
+        if (_deskew) psi.ArgumentList.Add("--deskew");
+        if (_clean) psi.ArgumentList.Add("--clean");
+        if (_oversample > 0)
+        {
+            psi.ArgumentList.Add("--oversample");
+            psi.ArgumentList.Add(_oversample.ToString());
+        }
         psi.ArgumentList.Add("--language");
         psi.ArgumentList.Add(_language);
         psi.ArgumentList.Add("--jobs");

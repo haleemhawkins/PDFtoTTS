@@ -16,10 +16,19 @@ RUN dotnet publish src/PDFtoTTS.Api/PDFtoTTS.Api.csproj -c Release -o /app/publi
 FROM mcr.microsoft.com/dotnet/aspnet:10.0 AS runtime
 WORKDIR /app
 
-# ocrmypdf + Tesseract (English) so scanned/image-only PDFs get a searchable text
-# layer added server-side before extraction. Pulls ghostscript/qpdf/unpaper as deps.
+# ocrmypdf + Tesseract so scanned/image-only PDFs get a searchable text layer added
+# server-side before extraction. Pulls ghostscript/qpdf/unpaper as deps. osd is the
+# orientation/script model required by --rotate-pages. We then overwrite the default
+# (fast) English model with the slower, more accurate tessdata_best LSTM model — a
+# direct base-accuracy win on scans. curl/ca-certificates are only needed for that
+# download and are removed afterwards to keep the image lean.
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends ocrmypdf tesseract-ocr-eng \
+    && apt-get install -y --no-install-recommends \
+        ocrmypdf tesseract-ocr-eng tesseract-ocr-osd curl ca-certificates \
+    && ENG="$(dpkg -L tesseract-ocr-eng | grep '/eng.traineddata$')" \
+    && curl -fsSL -o "$ENG" \
+        https://github.com/tesseract-ocr/tessdata_best/raw/main/eng.traineddata \
+    && apt-get purge -y --auto-remove curl \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=build /app/publish .

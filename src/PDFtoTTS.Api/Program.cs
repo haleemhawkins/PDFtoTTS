@@ -12,6 +12,7 @@ using PDFtoTTS.Orchestration;
 using KokoroV1 = PDFtoTTS.Grpc.Kokoro.V1;
 using AlignV1 = PDFtoTTS.Grpc.Alignment.V1;
 using CommonV1 = PDFtoTTS.Grpc.Common.V1;
+using OcrV1 = PDFtoTTS.Grpc.Ocr.V1;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -30,8 +31,10 @@ builder.Services.Configure<Microsoft.AspNetCore.Http.Features.FormOptions>(o =>
 // gRPC clients to the Python workers.
 string kokoroAddr = builder.Configuration["KOKORO_GRPC"] ?? "http://localhost:50051";
 string whisperxAddr = builder.Configuration["WHISPERX_GRPC"] ?? "http://localhost:50052";
+string suryaAddr = builder.Configuration["SURYA_GRPC"] ?? "http://localhost:50053";
 builder.Services.AddGrpcClient<KokoroV1.KokoroTts.KokoroTtsClient>(o => o.Address = new Uri(kokoroAddr));
 builder.Services.AddGrpcClient<AlignV1.Alignment.AlignmentClient>(o => o.Address = new Uri(whisperxAddr));
+builder.Services.AddGrpcClient<OcrV1.Ocr.OcrClient>(o => o.Address = new Uri(suryaAddr));
 
 // Worker abstractions. The mock flags swap real gRPC workers for in-process
 // fakes so the pipeline can run without a GPU. USE_MOCK_WORKERS toggles both;
@@ -55,13 +58,20 @@ builder.Services.AddSingleton<SynthesisOrchestrator>();
 builder.Services.AddSingleton<PdfExtractor>();
 builder.Services.AddSingleton<EpubExtractor>();
 builder.Services.AddSingleton<PDFtoTTS.Api.Documents.PdfOcr>();
+// Surya (GPU) is the primary scanned-PDF OCR engine; the pipeline falls back to
+// ocrmypdf/Tesseract when it's disabled or unreachable. Disabled by default in mock
+// mode (no GPU), where ocrmypdf in the api image handles scans.
+if (builder.Configuration.GetValue("USE_SURYA_OCR", !mockAll))
+    builder.Services.AddSingleton<IOcrEngine, SuryaOcr>();
+else
+    builder.Services.AddSingleton<IOcrEngine, DisabledOcrEngine>();
 builder.Services.AddSingleton<DocumentPipeline>();
 
 // Storage + pipeline runner.
 string dataDir = builder.Configuration["DATA_DIR"]
     ?? Path.Combine(Path.GetTempPath(), "pdftotts-data");
 builder.Services.AddSingleton<IFileStorage>(new LocalFileStorage(dataDir));
-builder.Services.AddSingleton<IDocumentStore, InMemoryDocumentStore>();
+builder.Services.AddSingleton<IDocumentStore, PersistentDocumentStore>();
 builder.Services.AddSingleton<ISessionStore, InMemorySessionStore>();
 builder.Services.AddSingleton<SessionPipeline>();
 
@@ -99,11 +109,52 @@ app.MapPost("/api/documents", async (IFormFile file, IFileStorage files, IDocume
     return Results.Created($"/api/documents/{id}", document);
 }).DisableAntiforgery();
 
+app.MapGet("/api/documents", (IDocumentStore docs) => Results.Ok(docs.All()));
+
 app.MapGet("/api/documents/{id:guid}", (Guid id, IDocumentStore docs) =>
     docs.Get(id) is { } d ? Results.Ok(d.Document) : Results.NotFound());
 
 app.MapGet("/api/documents/{id:guid}/words", (Guid id, IDocumentStore docs) =>
     docs.Get(id) is { } d ? Results.Ok(d.Words) : Results.NotFound());
+
+// Serve the stored original so the client can render the PDF/EPUB without
+// re-uploading it (the library opens documents by id).
+app.MapGet("/api/documents/{id:guid}/original", (Guid id, IDocumentStore docs, IFileStorage files) =>
+{
+    if (docs.Get(id) is not { } d) return Results.NotFound();
+    string path = files.OriginalFullPath(id, d.Document.Type);
+    if (!File.Exists(path)) return Results.NotFound();
+    string contentType = d.Document.Type == DocumentType.Epub ? "application/epub+zip" : "application/pdf";
+    return Results.File(path, contentType, d.Document.Filename, enableRangeProcessing: true);
+});
+
+// Rename a document's display title.
+app.MapPatch("/api/documents/{id:guid}", (Guid id, RenameDocumentRequest body, IDocumentStore docs) =>
+{
+    if (string.IsNullOrWhiteSpace(body.Name))
+        return Results.BadRequest(new ErrorResponse("INVALID_NAME", "A name is required."));
+    return docs.Rename(id, body.Name.Trim()) is { } d
+        ? Results.Ok(d)
+        : Results.NotFound(new ErrorResponse("DOCUMENT_NOT_FOUND", $"No document {id}."));
+});
+
+// Delete a document, cascading to its in-flight sessions, their audio, the stored
+// original, and the persisted words. Synthesized audio is per-session, so this
+// just tears those down — nothing audio-related is persisted to begin with.
+app.MapDelete("/api/documents/{id:guid}", (Guid id, IDocumentStore docs,
+    ISessionStore sessions, IFileStorage files) =>
+{
+    foreach (var session in sessions.ForDocument(id))
+    {
+        session.Cancellation.Cancel();
+        sessions.Remove(session.Session.Id);
+        files.DeleteSessionAudio(session.Session.Id);
+    }
+    if (docs.Remove(id) is not { } removed)
+        return Results.NotFound(new ErrorResponse("DOCUMENT_NOT_FOUND", $"No document {id}."));
+    files.DeleteOriginal(id, removed.Document.Type);
+    return Results.NoContent();
+});
 
 // --- Sessions -------------------------------------------------------------
 

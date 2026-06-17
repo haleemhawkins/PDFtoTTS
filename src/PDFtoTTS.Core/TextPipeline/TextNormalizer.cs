@@ -84,7 +84,8 @@ public sealed partial class TextNormalizer
                     Text: phraseText,
                     SourceStart: words[i].Index,
                     SourceEnd: words[i + span - 1].Index,
-                    EndsSentence: phraseEnds));
+                    EndsSentence: phraseEnds,
+                    Terminator: phraseEnds ? SentenceTerminator(words[i + span - 1].Text) : '\0'));
                 i += span;
                 continue;
             }
@@ -94,9 +95,13 @@ public sealed partial class TextNormalizer
             if (spoken.Count == 0)
             {
                 // Pure punctuation: drop it, but a terminator promotes the
-                // previous token to a sentence boundary.
+                // previous token to a sentence boundary (carrying the mark).
                 if (endsSentence && tokens.Count > 0)
-                    tokens[^1] = tokens[^1] with { EndsSentence = true };
+                    tokens[^1] = tokens[^1] with
+                    {
+                        EndsSentence = true,
+                        Terminator = SentenceTerminator(word.Text)
+                    };
                 i++;
                 continue;
             }
@@ -106,12 +111,14 @@ public sealed partial class TextNormalizer
             for (int k = 0; k < spoken.Count; k++)
             {
                 bool last = k == spoken.Count - 1;
+                bool ends = last && endsSentence;
                 tokens.Add(new NormToken(
                     Index: tokens.Count,
                     Text: spoken[k],
                     SourceStart: word.Index,
                     SourceEnd: word.Index,
-                    EndsSentence: last && endsSentence));
+                    EndsSentence: ends,
+                    Terminator: ends ? SentenceTerminator(word.Text) : '\0'));
             }
 
             i++;
@@ -148,10 +155,15 @@ public sealed partial class TextNormalizer
     private static string StripForKey(string s) =>
         s.Trim('.', ',', ';', ':', '!', '?', '"', '\'', '(', ')', '[', ']', '“', '”', '‘', '’');
 
-    private static bool HasSentenceTerminator(string s)
+    private static bool HasSentenceTerminator(string s) => SentenceTerminator(s) != '\0';
+
+    // The sentence-ending mark on a raw source word (after peeling closing
+    // wrappers), or '\0' if it doesn't end a sentence. Lets the chunk text keep
+    // the right '.', '?' or '!' for intonation and pause length.
+    private static char SentenceTerminator(string s)
     {
         string t = s.TrimEnd(')', ']', '"', '\'', '”', '’');
-        return t.Length > 0 && t[^1] is '.' or '?' or '!';
+        return t.Length > 0 && t[^1] is '.' or '?' or '!' ? t[^1] : '\0';
     }
 
     /// <summary>

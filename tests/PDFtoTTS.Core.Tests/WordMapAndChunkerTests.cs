@@ -37,6 +37,27 @@ public class WordMapAndChunkerTests
     }
 
     [Fact]
+    public void Chunk_text_keeps_sentence_terminators_for_prosody()
+    {
+        // Periods/?/! are peeled into a flag during normalization; the chunk text
+        // sent to the voice must re-attach them so it gets the right intonation and
+        // a pause after each sentence. Commas stay attached throughout.
+        var tokens = _norm.Normalize(new[]
+        {
+            new SourceWord(0, "Hello,"),
+            new SourceWord(1, "world."),
+            new SourceWord(2, "Why?"),
+            new SourceWord(3, "Stop!"),
+        });
+
+        var chunk = new Chunker().Chunk(tokens).Single();
+
+        Assert.Equal("Hello, world. Why? Stop!", chunk.Text);
+        // The clean token text (used for alignment) keeps no terminators.
+        Assert.DoesNotContain(chunk.Tokens, t => t.Text.EndsWith('.') || t.Text.EndsWith('?'));
+    }
+
+    [Fact]
     public void Chunks_are_contiguous_and_cover_all_tokens_in_order()
     {
         var tokens = Tokens(60); // 60 single-token sentences

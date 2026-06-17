@@ -1,0 +1,38 @@
+syntax = "proto3";
+
+package pdftotts.ocr.v1;
+
+import "common.proto";
+
+option csharp_namespace = "PDFtoTTS.Grpc.Ocr.V1";
+
+// Surya OCR worker. Reads a scanned/image-only PDF from the shared volume by
+// path, renders each page, and returns recognized words in reading order with
+// bounding boxes already converted to PDF user space (origin bottom-left, points)
+// so they line up with PdfPig-extracted words and the frontend's highlight overlay.
+service Ocr {
+  rpc Recognize(OcrRequest) returns (OcrResponse);
+  rpc Health(pdftotts.common.v1.HealthRequest)
+      returns (pdftotts.common.v1.HealthResponse);
+}
+
+message OcrRequest {
+  string pdf_path = 1;   // path under /data to the source PDF
+  string language = 2;   // ISO 639-1 hint (Surya is multilingual; may be empty)
+}
+
+message OcrWord {
+  string text = 1;
+  int32  page = 2;       // 1-based page number
+  // Bounding box in PDF user space (origin bottom-left), in points.
+  double x = 3;
+  double y = 4;
+  double width = 5;
+  double height = 6;
+  float  confidence = 7; // 0..1 line-level recognition confidence
+}
+
+message OcrResponse {
+  repeated OcrWord words = 1; // reading order, page by page
+  int32 page_count = 2;
+}
