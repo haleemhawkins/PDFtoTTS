@@ -27,10 +27,10 @@ export function usePdfDocument(file: File | null, enabled: boolean): PdfDoc | nu
   const [pdf, setPdf] = useState<PdfDoc | null>(null);
 
   useEffect(() => {
-    if (!file || !enabled) {
-      setPdf(null);
-      return;
-    }
+    // No reset needed here: on any deps change the previous run's cleanup already
+    // ran setPdf(null) (and the initial state is null), so a synchronous reset in
+    // the effect body would be redundant — and it cascades renders.
+    if (!file || !enabled) return;
     let cancelled = false;
     // Keep the loading task so we can release the document (and its worker
     // resources) on cleanup — destroy() lives on the task, not the proxy.

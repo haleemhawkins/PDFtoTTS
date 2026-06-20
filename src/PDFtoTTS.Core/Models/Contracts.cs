@@ -58,9 +58,23 @@ public sealed record ProcessedChunk(
     IReadOnlyList<WordData> Words,
     bool Degraded = false);
 
+/// <summary>The reader's last position in a document, persisted server-side so a
+/// returning reader resumes the same spot on any device/browser (not just the one
+/// that stored it locally). <see cref="Page"/> is 1-based (the PDF page; 1 for
+/// EPUB), <see cref="Word"/> is the global source-word index, and
+/// <see cref="UpdatedAtMs"/> is the writing client's Unix-ms timestamp — used for
+/// last-writer-wins when two devices report divergent positions.</summary>
+public sealed record ReadingPosition(
+    int Page = 1,
+    int Word = 0,
+    string? Voice = null,
+    float Speed = 1f,
+    long UpdatedAtMs = 0);
+
 /// <summary>An uploaded document and its extraction status.</summary>
 /// <param name="Progress">Extraction/OCR progress in [0,1] while <see cref="DocumentStatus.Extracting"/>.
 /// Drives the client's "Preparing document…" progress bar; 0 when not OCR'ing.</param>
+/// <param name="Position">The reader's last resume point, or null if never opened.</param>
 public sealed record Document(
     Guid Id,
     string Filename,
@@ -68,7 +82,8 @@ public sealed record Document(
     int PageCount,
     int WordCount,
     DocumentStatus Status,
-    double Progress = 0);
+    double Progress = 0,
+    ReadingPosition? Position = null);
 
 /// <summary>A TTS render session over a document with chosen voice/speed.</summary>
 public sealed record TtsSession(

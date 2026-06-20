@@ -1,3 +1,6 @@
+using PDFtoTTS.Api.Documents;
+using PDFtoTTS.Core.Models;
+
 namespace PDFtoTTS.Api.Storage;
 
 /// <summary>
@@ -10,6 +13,10 @@ public interface IFileStorage
     Task<string> SaveOriginalAsync(Guid documentId, string extension, Stream content, CancellationToken ct);
     string AudioRelativePath(Guid sessionId, int chunkIndex);
     string AudioFullPath(Guid sessionId, int chunkIndex);
+    /// <summary>Absolute path to a document's stored original (for serving/deletion).</summary>
+    string OriginalFullPath(Guid documentId, DocumentType type);
+    /// <summary>Delete a document's stored original; no-op if it's already gone.</summary>
+    void DeleteOriginal(Guid documentId, DocumentType type);
     /// <summary>Resolve a path relative to the data root to an absolute path, creating its directory.</summary>
     string FullPath(string relativePath);
     void DeleteSessionAudio(Guid sessionId);
@@ -40,6 +47,15 @@ public sealed class LocalFileStorage : IFileStorage
 
     public string AudioFullPath(Guid sessionId, int chunkIndex) =>
         Path.Combine(_dataDir, AudioRelativePath(sessionId, chunkIndex));
+
+    public string OriginalFullPath(Guid documentId, DocumentType type) =>
+        Path.Combine(_dataDir, "originals", $"{documentId}{FileTypeDetector.Extension(type)}");
+
+    public void DeleteOriginal(Guid documentId, DocumentType type)
+    {
+        string path = OriginalFullPath(documentId, type);
+        if (File.Exists(path)) File.Delete(path);
+    }
 
     public string FullPath(string relativePath)
     {

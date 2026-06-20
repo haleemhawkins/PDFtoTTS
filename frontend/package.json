@@ -18,6 +18,7 @@
     "pdfjs-dist": "^6.0.227",
     "react": "^19.2.6",
     "react-dom": "^19.2.6",
+    "react-reader": "^2.0.15",
     "wavesurfer.js": "^7.12.7"
   },
   "devDependencies": {

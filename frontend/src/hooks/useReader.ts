@@ -5,6 +5,7 @@ import { ChunkQueue } from "../audio/chunkQueue";
 import type { ProcessedChunk, SourceWordData } from "../api/types";
 import { ReaderConnection } from "../signalr/readerConnection";
 import { activeWordIndex, buildTimeline, type Timeline } from "../sync/wordTimeline";
+import { WakeLockManager } from "../wakeLock";
 
 export type UiState =
   | "idle" | "uploading" | "extracting" | "processing" | "playing" | "paused" | "error" | "reconnecting";
@@ -13,6 +14,8 @@ const EMPTY_TIMELINE: Timeline = { words: [], chunkOffsets: new Map(), totalMs: 
 
 export interface ReaderController {
   state: UiState;
+  /** Id of the document currently loaded in the reader (null when idle). */
+  documentId: string | null;
   progress: number;
   timeline: Timeline;
   activeIndex: number; // index into timeline.words, or -1
@@ -24,11 +27,16 @@ export interface ReaderController {
   extractProgress: number;
   error: string | null;
   start: (file: File, voice: string, speed: number, startPage?: number, startWordIndex?: number) => Promise<void>;
+  /** Open an already-uploaded library document by id: fetch its original + words
+   *  from the server and start a session, landing paused at the saved position. */
+  open: (documentId: string, voice: string, speed: number, startPage?: number, startWordIndex?: number) => Promise<void>;
   /** Tear everything down and return to the idle (upload) state. */
   reset: () => void;
   play: () => void;
   pause: () => void;
   setRate: (rate: number) => void;
+  /** Re-synthesize at a new narration voice (Kokoro), resuming at the current word. */
+  changeVoice: (voice: string) => Promise<void>;
   /** Re-synthesize at a new speaking pace (Kokoro native speed = natural pitch)
    *  and resume at the current word. */
   changeSpeed: (speed: number) => Promise<void>;
@@ -38,12 +46,16 @@ export interface ReaderController {
   jumpToWord: (sourceWordIndex: number) => void;
   /** Jump to a page (its first word) — same cancel-and-resynthesize behavior. */
   jumpToPage: (page: number) => void;
+  /** Position at a source word and preload, staying PAUSED (manual section/page
+   *  navigation). The format-agnostic primitive behind jumpToPage and EPUB nav. */
+  jumpToSourceWord: (sourceWordIndex: number) => void;
   seekToMs: (ms: number) => void;
   getPositionMs: () => number;
 }
 
 export function useReader(): ReaderController {
   const [state, setState] = useState<UiState>("idle");
+  const [documentId, setDocumentId] = useState<string | null>(null);
   const [progress, setProgress] = useState(0);
   const [extractProgress, setExtractProgress] = useState(0);
   const [timeline, setTimeline] = useState<Timeline>(EMPTY_TIMELINE);
@@ -66,6 +78,11 @@ export function useReader(): ReaderController {
   const docWords = useRef<SourceWordData[]>([]);
   const activeIndexRef = useRef(-1);
   const resumeSourceWord = useRef<number | null>(null);
+  // Keeps the mobile screen awake while reading (released on pause/reset).
+  const wakeLock = useRef(new WakeLockManager());
+  // Latest timeline for the rAF highlight loop + re-sync. Declared before `tick`
+  // (which reads it); kept current by the effect further down.
+  const timelineRef = useRef(timeline);
 
   const rebuildTimeline = useCallback(() => {
     setTimeline(buildTimeline(queue.current.contiguous()));
@@ -84,17 +101,18 @@ export function useReader(): ReaderController {
     rebuildTimeline();
   }, [rebuildTimeline]);
 
-  const tick = useCallback(() => {
+  // Named function expression `step` so the rAF loop re-schedules itself without
+  // referencing the `tick` const inside its own initializer (use-before-declared).
+  const tick = useCallback(function step() {
     const ms = player.current?.currentMs() ?? 0;
     setActiveIndex((prev) => {
       const next = activeWordIndex(timelineRef.current.words, ms);
       return next === prev ? prev : next;
     });
-    raf.current = requestAnimationFrame(tick);
+    raf.current = requestAnimationFrame(step);
   }, []);
 
-  // Keep refs of the latest timeline + active index for the rAF loop and re-sync.
-  const timelineRef = useRef(timeline);
+  // Keep the timeline + active-index refs current for the rAF loop and re-sync.
   useEffect(() => {
     timelineRef.current = timeline;
   }, [timeline]);
@@ -156,6 +174,7 @@ export function useReader(): ReaderController {
         setState("uploading");
         const doc = await api.uploadDocument(file);
         docId.current = doc.id;
+        setDocumentId(doc.id);
         voiceRef.current = voice;
         // Extraction runs server-side; a scanned PDF is OCR'd first (can take a few
         // minutes). Wait for Ready before fetching words / opening a session.
@@ -187,12 +206,41 @@ export function useReader(): ReaderController {
     [openSession],
   );
 
+  // Open an already-uploaded document by id (from the library). The original is
+  // rendered by the caller via GET /…/original; here we just fetch its words and
+  // open a session, landing PAUSED at the saved position (highlighted, no auto-play).
+  const open = useCallback(
+    async (documentId: string, voice: string, speed: number, startPage = 1, startWordIndex?: number) => {
+      try {
+        setError(null);
+        setState("processing");
+        docId.current = documentId;
+        setDocumentId(documentId);
+        voiceRef.current = voice;
+        docWords.current = await api.getWords(documentId).catch(() => []);
+        const startWord = startWordIndex != null
+          ? Math.max(0, startWordIndex)
+          : startPage > 1
+            ? (docWords.current.find((w) => w.page === startPage)?.index ?? 0)
+            : 0;
+        resumeSourceWord.current = startWord;
+        wasPlaying.current = false;
+        await openSession(voice, speed, startWord);
+      } catch (e) {
+        setError(e instanceof Error ? e.message : String(e));
+        setState("error");
+      }
+    },
+    [openSession],
+  );
+
   // Tear down and return to the upload screen.
   const reset = useCallback(() => {
     void connection.current?.stop();
     connection.current = null;
     player.current?.dispose();
     player.current = null;
+    wakeLock.current.release();
     if (raf.current !== null) {
       cancelAnimationFrame(raf.current);
       raf.current = null;
@@ -203,6 +251,7 @@ export function useReader(): ReaderController {
     }
     queue.current = new ChunkQueue<ProcessedChunk>();
     docId.current = null;
+    setDocumentId(null);
     docWords.current = [];
     resumeSourceWord.current = null;
     wasPlaying.current = false;
@@ -222,10 +271,18 @@ export function useReader(): ReaderController {
   // We stay paused on return — resuming is an explicit Play tap from this spot.
   useEffect(() => {
     const onVisibility = () => {
-      if (!document.hidden) return;
+      if (!document.hidden) {
+        // Back in the foreground: re-request the lock the OS dropped while
+        // hidden, if we're still actively reading.
+        if (state === "playing") void wakeLock.current.reacquire();
+        return;
+      }
       if (!wasPlaying.current && state !== "playing") return;
       player.current?.pause();
       wasPlaying.current = false;
+      // The OS auto-drops the screen lock while hidden; sync our intent so a
+      // later return-to-foreground doesn't think a lock is still held.
+      wakeLock.current.release();
       setState((s) => (s === "playing" || s === "processing" ? "paused" : s));
     };
     document.addEventListener("visibilitychange", onVisibility);
@@ -236,12 +293,14 @@ export function useReader(): ReaderController {
     player.current?.play();
     wasPlaying.current = true;
     setState("playing");
+    void wakeLock.current.acquire();
     if (raf.current === null) raf.current = requestAnimationFrame(tick);
   }, [tick]);
 
   const pause = useCallback(() => {
     player.current?.pause();
     wasPlaying.current = false;
+    wakeLock.current.release();
     // Stop the highlight loop while paused; otherwise it keeps recomputing the
     // active word from the player's (frozen) position and can fight navigation.
     if (raf.current !== null) {
@@ -272,6 +331,14 @@ export function useReader(): ReaderController {
   const changeSpeed = useCallback(async (speed: number) => {
     const current = timelineRef.current.words[activeIndexRef.current];
     await restartAt(current?.wordIndex ?? 0, speed);
+  }, [restartAt]);
+
+  // Re-synthesize at a new narration voice, continuing from the current word.
+  // restartAt creates the new session with voiceRef.current, so set it first.
+  const changeVoice = useCallback(async (voice: string) => {
+    voiceRef.current = voice;
+    const current = timelineRef.current.words[activeIndexRef.current];
+    await restartAt(current?.wordIndex ?? 0, speedRef.current);
   }, [restartAt]);
 
   // After a re-synth, jump to the word we were on as soon as it streams in.
@@ -311,12 +378,13 @@ export function useReader(): ReaderController {
     }
   }, [seekToWord, restartAt]);
 
-  // Manually flipping pages (Prev/Next) positions at the page's first word and
-  // PRELOADS its audio, but does NOT auto-play — reading starts on an explicit Play
-  // tap. (Playback-driven page turns continue reading; they don't come through here.)
-  const jumpToPage = useCallback((page: number) => {
-    const first = docWords.current.find((w) => w.page === page);
-    if (!first) return;
+  // Manual navigation (PDF Prev/Next, EPUB section/chapter changes): position at a
+  // source word and PRELOAD its audio, but do NOT auto-play — reading starts on an
+  // explicit Play tap. (Playback-driven page turns continue reading; they don't come
+  // through here.) This is the shared, format-agnostic navigation primitive: the PDF
+  // pager turns a page into its first word, the EPUB reader passes a section's first
+  // word, and both land paused — identical behavior across formats.
+  const jumpToSourceWord = useCallback((sourceWordIndex: number) => {
     if (navTimer.current !== null) {
       clearTimeout(navTimer.current);
       navTimer.current = null;
@@ -328,7 +396,7 @@ export function useReader(): ReaderController {
       raf.current = null;
     }
     wasPlaying.current = false; // a manual flip is not an intent to play
-    const idx = timelineRef.current.words.findIndex((w) => w.wordIndex === first.index);
+    const idx = timelineRef.current.words.findIndex((w) => w.wordIndex === sourceWordIndex);
     if (idx >= 0) {
       // Already synthesized — stop any audio, seek + highlight, stay paused.
       const word = timelineRef.current.words[idx];
@@ -337,17 +405,23 @@ export function useReader(): ReaderController {
       setActiveIndex(idx);
       setState((s) => (s === "playing" || s === "processing" ? "paused" : s));
     } else {
-      // Not synthesized yet: disable Play and preload from this page after a short
-      // settle delay (debounced above) so flipping through pages stays cheap.
+      // Not synthesized yet: disable Play and preload from here after a short settle
+      // delay (debounced above) so flipping through sections/pages stays cheap.
       setReady(false);
       setActiveIndex(-1);
       setState("processing");
       navTimer.current = window.setTimeout(() => {
         navTimer.current = null;
-        void restartAt(first.index, speedRef.current);
+        void restartAt(sourceWordIndex, speedRef.current);
       }, 500);
     }
   }, [restartAt]);
+
+  const jumpToPage = useCallback((page: number) => {
+    const first = docWords.current.find((w) => w.page === page);
+    if (!first) return;
+    jumpToSourceWord(first.index);
+  }, [jumpToSourceWord]);
 
   const seekToMs = useCallback((ms: number) => {
     player.current?.seek(ms, timelineRef.current.chunkOffsets);
@@ -357,17 +431,19 @@ export function useReader(): ReaderController {
   const getPositionMs = useCallback(() => player.current?.currentMs() ?? 0, []);
 
   useEffect(() => {
+    const wl = wakeLock.current; // stable instance; capture for the cleanup closure
     return () => {
       if (raf.current !== null) cancelAnimationFrame(raf.current);
       if (navTimer.current !== null) clearTimeout(navTimer.current);
       void connection.current?.stop();
       player.current?.dispose();
+      wl.release();
     };
   }, []);
 
   return {
-    state, progress, extractProgress, timeline, activeIndex, ready, error,
-    start, reset, play, pause, setRate, changeSpeed,
-    seekToWord, jumpToWord, jumpToPage, seekToMs, getPositionMs,
+    state, documentId, progress, extractProgress, timeline, activeIndex, ready, error,
+    start, open, reset, play, pause, setRate, changeSpeed, changeVoice,
+    seekToWord, jumpToWord, jumpToPage, jumpToSourceWord, seekToMs, getPositionMs,
   };
 }

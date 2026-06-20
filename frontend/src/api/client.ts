@@ -20,8 +20,57 @@ export async function uploadDocument(file: File): Promise<DocumentInfo> {
   return asJson(await fetch("/api/documents", { method: "POST", body: form }));
 }
 
+export async function listDocuments(): Promise<DocumentInfo[]> {
+  return asJson(await fetch("/api/documents"));
+}
+
 export async function getDocument(id: string): Promise<DocumentInfo> {
   return asJson(await fetch(`/api/documents/${id}`));
+}
+
+export async function renameDocument(id: string, name: string): Promise<DocumentInfo> {
+  return asJson(
+    await fetch(`/api/documents/${id}`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ name }),
+    }),
+  );
+}
+
+/** Save the reading position server-side so it resumes on any device. Best-effort:
+ *  a failed save must never disrupt reading. `keepalive` lets it complete even when
+ *  fired during page unload (tab close / navigation). */
+export async function savePosition(
+  id: string,
+  pos: { page: number; word: number; voice: string; speed: number; updatedAtMs: number },
+): Promise<void> {
+  try {
+    await fetch(`/api/documents/${id}/position`, {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(pos),
+      keepalive: true,
+    });
+  } catch {
+    /* offline / server down — the local cache still has it */
+  }
+}
+
+export async function deleteDocument(id: string): Promise<void> {
+  const res = await fetch(`/api/documents/${id}`, { method: "DELETE" });
+  if (!res.ok && res.status !== 404) throw new Error(`${res.status} ${res.statusText}`);
+}
+
+/** Fetch a stored original back as a File so the PDF/EPUB renderers can open it
+ *  without the user re-selecting the document. */
+export async function getOriginal(doc: DocumentInfo): Promise<File> {
+  const res = await fetch(`/api/documents/${doc.id}/original`);
+  if (!res.ok) throw new Error(`Couldn't load document (${res.status}).`);
+  const blob = await res.blob();
+  return new File([blob], doc.filename, {
+    type: doc.type === "Epub" ? "application/epub+zip" : "application/pdf",
+  });
 }
 
 /** Poll the document until extraction (and any OCR) finishes. Resolves on Ready,
@@ -38,7 +87,11 @@ export async function waitForDocumentReady(
     onTick?.(doc);
     if (doc.status === "Ready") return doc;
     if (doc.status === "Error")
-      throw new Error("Couldn't read this document — no selectable text found (a scanned PDF that OCR couldn't recover).");
+      throw new Error(
+        doc.type === "Epub"
+          ? "Couldn't read this EPUB — no readable text was found (it may be image-only, e.g. a comic or art book)."
+          : "Couldn't read this document — no selectable text found (a scanned PDF that OCR couldn't recover).",
+      );
     if (Date.now() > deadline) throw new Error("Timed out preparing this document.");
     await new Promise((r) => setTimeout(r, intervalMs));
   }

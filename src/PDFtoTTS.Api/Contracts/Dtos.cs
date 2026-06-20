@@ -7,6 +7,15 @@ namespace PDFtoTTS.Api.Contracts;
 public sealed record CreateSessionRequest(
     string Voice, float Speed = 1f, string Language = "en", int StartWordIndex = 0);
 
+/// <summary>Body for renaming a document's display title.</summary>
+public sealed record RenameDocumentRequest(string Name);
+
+/// <summary>Body for saving a document's reading position (resume point) so it
+/// follows the user across devices. <see cref="UpdatedAtMs"/> is the client's
+/// Unix-ms timestamp, used server-side for last-writer-wins.</summary>
+public sealed record UpdatePositionRequest(
+    int Page = 1, int Word = 0, string? Voice = null, float Speed = 1f, long UpdatedAtMs = 0);
+
 /// <summary>Structured error envelope returned by all endpoints.</summary>
 public sealed record ErrorResponse(string Code, string Message, object? Detail = null);
 

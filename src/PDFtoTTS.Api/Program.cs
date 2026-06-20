@@ -138,6 +138,27 @@ app.MapPatch("/api/documents/{id:guid}", (Guid id, RenameDocumentRequest body, I
         : Results.NotFound(new ErrorResponse("DOCUMENT_NOT_FOUND", $"No document {id}."));
 });
 
+// Save the reader's resume position so it follows the user across devices (the
+// client also caches it locally; the server is the cross-device source of truth).
+// Idempotent: PUT the latest known position; the store keeps the newest by timestamp.
+app.MapPut("/api/documents/{id:guid}/position", (Guid id, UpdatePositionRequest body, IDocumentStore docs) =>
+{
+    // Last-writer-wins orders by the client's clock, so clamp a wildly-future
+    // timestamp (a badly-skewed device) to server-now + 1h: it can't out-rank
+    // everything forever and permanently freeze the resume point on other devices.
+    long nowMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+    long updatedAtMs = Math.Min(body.UpdatedAtMs, nowMs + 3_600_000);
+    var position = new ReadingPosition(
+        Page: Math.Max(1, body.Page),
+        Word: Math.Max(0, body.Word),
+        Voice: string.IsNullOrWhiteSpace(body.Voice) ? null : body.Voice,
+        Speed: body.Speed <= 0 ? 1f : body.Speed,
+        UpdatedAtMs: updatedAtMs);
+    return docs.SetPosition(id, position) is { } d
+        ? Results.Ok(d)
+        : Results.NotFound(new ErrorResponse("DOCUMENT_NOT_FOUND", $"No document {id}."));
+});
+
 // Delete a document, cascading to its in-flight sessions, their audio, the stored
 // original, and the persisted words. Synthesized audio is per-session, so this
 // just tears those down — nothing audio-related is persisted to begin with.

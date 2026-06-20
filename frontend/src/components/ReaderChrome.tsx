@@ -1,4 +1,5 @@
 import type { UiState } from "../hooks/useReader";
+import type { Voice } from "../api/types";
 import { Scrubber } from "./Scrubber";
 
 interface Props {
@@ -8,12 +9,15 @@ interface Props {
   speed: number;
   totalMs: number;
   showMenu: boolean;
+  voices: Voice[];
+  voice: string;
   getPositionMs: () => number;
   onMenu: () => void;
   onHome: () => void;
   onPlay: () => void;
   onPause: () => void;
   onSpeed: (speed: number) => void;
+  onVoice: (voice: string) => void;
   onSeek: (ms: number) => void;
 }
 
@@ -27,8 +31,8 @@ const SPEEDS = [0.75, 1, 1.25, 1.5, 2];
  * starts read-out.
  */
 export function ReaderChrome({
-  state, ready, progress, speed, totalMs, showMenu,
-  getPositionMs, onMenu, onHome, onPlay, onPause, onSpeed, onSeek,
+  state, ready, progress, speed, totalMs, showMenu, voices, voice,
+  getPositionMs, onMenu, onHome, onPlay, onPause, onSpeed, onVoice, onSeek,
 }: Props) {
   const isPlaying = state === "playing";
   const pct = Math.round(progress * 100);
@@ -67,6 +71,16 @@ export function ReaderChrome({
             ))}
           </select>
         </label>
+
+        {voices.length > 0 && (
+          <label className="voice-select" title="Narration voice">
+            <select value={voice} onChange={(e) => onVoice(e.target.value)}>
+              {voices.map((v) => (
+                <option key={v.id} value={v.id}>{v.label}</option>
+              ))}
+            </select>
+          </label>
+        )}
 
         <Scrubber getPositionMs={getPositionMs} totalMs={totalMs} onSeek={onSeek} />
 

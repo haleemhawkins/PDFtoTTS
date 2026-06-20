@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type MouseEvent } from "react";
 import type { PdfDoc } from "../pdf/usePdfDocument";
 import type { Timeline } from "../sync/wordTimeline";
 
@@ -40,7 +40,6 @@ export function PdfReader({
   const lastScrolledIndex = useRef(-1);
   const [page, setPage] = useState(initialPage);
   const [viewport, setViewport] = useState<import("pdfjs-dist").PageViewport | null>(null);
-  const [overlays, setOverlays] = useState<OverlayBox[]>([]);
   const [containerWidth, setContainerWidth] = useState(0);
 
   const SCROLL_GRACE_MS = 2500;
@@ -50,12 +49,14 @@ export function PdfReader({
     onPageChange?.(page);
   }, [page, onPageChange]);
 
-  // External navigation (a thumbnail / chapter pick): show that page. The seq
-  // bumps even when re-picking the same page, so it always takes effect.
-  useEffect(() => {
+  // External navigation (a thumbnail / chapter pick): show that page. The seq bumps
+  // even when re-picking the same page, so it always takes effect. Handled as a
+  // guarded render-time transition (not an effect) to avoid cascading renders.
+  const [prevGotoSeq, setPrevGotoSeq] = useState(gotoSeq);
+  if (prevGotoSeq !== gotoSeq) {
+    setPrevGotoSeq(gotoSeq);
     if (gotoSeq > 0) setPage(gotoPage);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [gotoSeq]);
+  }
 
   // Measure the available width BEFORE first paint (useLayoutEffect) so the page
   // renders fit-to-width immediately — never a momentary full-size render that
@@ -128,10 +129,13 @@ export function PdfReader({
     };
   }, [pdf, page, scale, containerWidth]);
 
-  // Recompute overlay boxes for the current page when the viewport or the
-  // streamed words change. This is cheap and independent of canvas rendering.
-  useEffect(() => {
-    if (!viewport) return;
+  // Overlay boxes for the current page, derived from the viewport + streamed words.
+  // Memoized (not state+effect) so it recomputes only when those inputs change and
+  // doesn't cascade a render. Cheap and independent of canvas rendering.
+  const overlays = useMemo<OverlayBox[]>(() => {
+    if (!viewport) return [];
+    const pageW = viewport.width;
+    const pageH = viewport.height;
     const boxes: OverlayBox[] = [];
     timeline.words.forEach((w, i) => {
       if (w.page !== page || !w.bbox) return;
@@ -141,23 +145,33 @@ export function PdfReader({
         w.bbox.x + w.bbox.width,
         w.bbox.y + w.bbox.height,
       ]);
-      boxes.push({
-        timelineIndex: i,
-        wordIndex: w.wordIndex,
-        left: Math.min(r[0], r[2]),
-        top: Math.min(r[1], r[3]),
-        width: Math.abs(r[2] - r[0]),
-        height: Math.abs(r[3] - r[1]),
-      });
+      // Clamp the box to the page rectangle so the highlight can never spill into
+      // the margins around the page — e.g. a word whose bbox sits slightly outside
+      // the mediabox (common in OCR'd text layers). Words fully off-page are dropped.
+      const left = Math.max(0, Math.min(r[0], r[2], pageW));
+      const top = Math.max(0, Math.min(r[1], r[3], pageH));
+      const right = Math.min(pageW, Math.max(r[0], r[2], 0));
+      const bottom = Math.min(pageH, Math.max(r[1], r[3], 0));
+      const width = right - left;
+      const height = bottom - top;
+      if (width <= 0 || height <= 0) return; // fully outside the page
+      boxes.push({ timelineIndex: i, wordIndex: w.wordIndex, left, top, width, height });
     });
-    setOverlays(boxes);
+    return boxes;
   }, [viewport, timeline, page]);
 
-  // Follow the active word across pages while playing (auto page-turn).
+  // Follow the active word across pages during playback (auto page-turn). Keyed
+  // on the active word's page TRANSITIONS only — deliberately NOT on `page` — so a
+  // manual jump (Prev/Next/drawer) to a page the reader hasn't reached yet isn't
+  // instantly snapped back to the active word's page (which made Next look stuck).
+  const lastActivePage = useRef<number | null>(null);
   useEffect(() => {
-    const active = timeline.words[activeIndex];
-    if (active?.page && active.page !== page) setPage(active.page);
-  }, [activeIndex, timeline, page]);
+    const ap = timeline.words[activeIndex]?.page;
+    if (ap && ap !== lastActivePage.current) {
+      lastActivePage.current = ap;
+      setPage(ap);
+    }
+  }, [activeIndex, timeline]);
 
   // Record genuine user scrolls (wheel/touch) — not programmatic scrollIntoView —
   // to grant a grace period during which auto-scroll backs off (design §6.7).
@@ -194,10 +208,41 @@ export function PdfReader({
     if (activeChanged || offscreen) el.scrollIntoView({ block: "center", behavior: "smooth" });
   }, [activeIndex, overlays]);
 
+  // A tap on the page: seek to the nearest word if the tap is on or near one
+  // (forgiving — word boxes are tiny touch targets), otherwise toggle the chrome.
+  // This makes "tap a word to start reading" reliable without stealing taps in
+  // genuinely empty space (margins, paragraph gaps), which still toggle.
+  const onStageTap = (e: MouseEvent<HTMLDivElement>) => {
+    e.stopPropagation(); // the stage decides; don't also fire .pdf-reader's toggle
+    const rect = e.currentTarget.getBoundingClientRect();
+    // Map screen px → overlay coordinate space (defensive against CSS scaling).
+    const sx = viewport && rect.width ? viewport.width / rect.width : 1;
+    const sy = viewport && rect.height ? viewport.height / rect.height : 1;
+    const x = (e.clientX - rect.left) * sx;
+    const y = (e.clientY - rect.top) * sy;
+
+    let best: OverlayBox | null = null;
+    let bestDist = Infinity;
+    for (const b of overlays) {
+      // Distance from the tap to the box (0 when inside it).
+      const dx = Math.max(b.left - x, 0, x - (b.left + b.width));
+      const dy = Math.max(b.top - y, 0, y - (b.top + b.height));
+      const d = Math.hypot(dx, dy);
+      if (d < bestDist) {
+        bestDist = d;
+        best = b;
+      }
+    }
+    // Tolerance ~1.5 lines so a tap just off a word still reads it.
+    if (best && bestDist <= Math.max(16, best.height * 1.5)) onJumpToWord(best.wordIndex);
+    else onToggleChrome();
+  };
+
   return (
-    <div className="pdf-reader" ref={containerRef}>
-      {/* Tapping the page background toggles the chrome (immersive reading). */}
-      <div className="pdf-stage" style={{ position: "relative" }} onClick={onToggleChrome}>
+    // Tapping the margins around the page toggles the chrome (immersive reading);
+    // taps on the page itself are handled by onStageTap (nearest-word or toggle).
+    <div className="pdf-reader" ref={containerRef} onClick={onToggleChrome}>
+      <div className="pdf-stage" style={{ position: "relative" }} onClick={onStageTap}>
         <canvas ref={canvasRef} />
         <div className="word-overlay">
           {overlays.map((b) => (
@@ -206,10 +251,6 @@ export function PdfReader({
               ref={b.timelineIndex === activeIndex ? activeBoxRef : undefined}
               className={"word-box" + (b.timelineIndex === activeIndex ? " active" : "")}
               style={{ left: b.left, top: b.top, width: b.width, height: b.height }}
-              onClick={(e) => {
-                e.stopPropagation(); // don't also toggle chrome
-                onJumpToWord(b.wordIndex);
-              }}
             />
           ))}
         </div>

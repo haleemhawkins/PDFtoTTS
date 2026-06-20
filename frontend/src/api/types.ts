@@ -39,6 +39,16 @@ export interface ProcessedChunk {
   degraded?: boolean;
 }
 
+/** The reader's last resume point, persisted server-side so it follows the user
+ *  across devices/browsers. `updatedAtMs` drives last-writer-wins. */
+export interface ReadingPosition {
+  page: number;
+  word: number;
+  voice: string | null;
+  speed: number;
+  updatedAtMs: number;
+}
+
 export interface DocumentInfo {
   id: string;
   filename: string;
@@ -48,6 +58,8 @@ export interface DocumentInfo {
   status: DocumentStatus;
   /** Extraction/OCR progress in [0,1] while status is "Extracting" (0 when not OCR'ing). */
   progress?: number;
+  /** Server-stored resume point (null when the document was never opened). */
+  position?: ReadingPosition | null;
 }
 
 export interface TtsSession {

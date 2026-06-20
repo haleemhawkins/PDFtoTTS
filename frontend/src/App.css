@@ -49,6 +49,118 @@
   gap: 0.75rem;
 }
 
+/* --- Library (home) ----------------------------------------------------- */
+
+.library-view {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  max-width: 760px;
+  margin: 2rem auto;
+}
+
+.library-upload {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.6rem 0.9rem;
+  background: var(--panel);
+  padding: 1rem 1.1rem;
+  border-radius: 12px;
+}
+
+.lib-field {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.library-empty {
+  color: #aaa;
+  text-align: center;
+  margin: 2rem 0;
+}
+
+.library-grid {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 0.8rem;
+}
+
+.library-card {
+  display: flex;
+  align-items: stretch;
+  background: var(--panel);
+  border-radius: 10px;
+  overflow: hidden;
+}
+
+.library-card.disabled {
+  opacity: 0.7;
+}
+
+.library-card-main {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.35rem;
+  text-align: left;
+  background: transparent;
+  border: none;
+  padding: 0.9rem;
+  color: #eee;
+  cursor: pointer;
+}
+
+.library-card-main:disabled {
+  cursor: default;
+}
+
+.doc-type-badge {
+  font-size: 0.65rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  padding: 0.1rem 0.4rem;
+  border-radius: 4px;
+  background: #444;
+  color: #eee;
+}
+
+.doc-type-badge.pdf {
+  background: #7a3b3b;
+}
+
+.doc-type-badge.epub {
+  background: #3b5a7a;
+}
+
+.library-card-name {
+  font-weight: 600;
+  word-break: break-word;
+}
+
+.library-card-status {
+  font-size: 0.78rem;
+  color: #aaa;
+}
+
+.library-card-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  padding: 0.5rem;
+  border-left: 1px solid #3a3a42;
+}
+
+.library-card-actions .icon-btn {
+  font-size: 0.9rem;
+  padding: 0.3rem 0.4rem;
+}
+
 .playback-bar {
   position: sticky;
   top: 0;
@@ -254,6 +366,7 @@ input {
   position: absolute;
   inset: 0;
   pointer-events: none;
+  overflow: hidden; /* never let a highlight box render outside the page */
 }
 
 .word-box {
@@ -273,6 +386,18 @@ input {
   align-items: center;
   gap: 1rem;
   justify-content: center;
+}
+
+/* react-reader's root is position:absolute/inset:0, so its parent must be
+   positioned and have an explicit height. The merged chrome overlays the top. */
+.epub-reader {
+  position: relative;
+  width: 100%;
+  height: 100dvh;
+  /* The book renders in a transparent iframe; paint a light "page" behind it so
+     no dark app background shows through (and the rendition theme keeps text dark
+     on top of it) — readable like the PDF's white pages. */
+  background: #ffffff;
 }
 
 /* --- Merged, auto-hiding chrome --------------------------------------------- */
@@ -325,6 +450,12 @@ input {
   display: inline-flex;
   align-items: center;
   justify-content: center;
+}
+
+/* Voice picker in the reader chrome — keep it compact so it doesn't crowd the
+   row; truncate long voice labels rather than wrap the strip. */
+.voice-select select {
+  max-width: 9rem;
 }
 
 /* "Ready to play" cue: a one-tap, clearly-actionable button. */
