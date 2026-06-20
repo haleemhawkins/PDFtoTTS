@@ -136,20 +136,30 @@ export function PdfReader({
     if (!viewport) return [];
     const pageW = viewport.width;
     const pageH = viewport.height;
-    // PdfPig reports word boxes relative to the page's CropBox origin, but pdf.js
-    // paints (and convertToViewportRectangle maps) in full PDF user space — so on a
-    // PDF whose CropBox is inset from the MediaBox (a trim margin), every box lands
-    // offset by that origin and the highlight sits off the words. Shift each box by
-    // the CropBox lower-left (0,0 for the common no-crop case, so a no-op there).
-    const [ox, oy] = [viewport.viewBox[0], viewport.viewBox[1]];
+    // PdfPig reports word boxes in the page's DISPLAYED (rotated-upright) frame with
+    // the origin at the CropBox lower-left. pdf.js's convertToViewportRectangle wants
+    // coordinates in UNROTATED PDF user space (it applies the page's /Rotate itself).
+    // Map each box back to user space per the page rotation, then add the CropBox
+    // origin — so the highlight sits on the words whether the page is cropped (a trim
+    // margin) and/or rotated. For the common rotation==0 case this is just "+origin".
+    const [X0, Y0, X1, Y1] = viewport.viewBox; // CropBox in unrotated user space
+    const cw = X1 - X0, ch = Y1 - Y0;
+    const rot = (((viewport.rotation ?? 0) % 360) + 360) % 360;
+    const toUserSpace = (dx: number, dy: number): [number, number] => {
+      switch (rot) {
+        case 90: return [X0 + cw - dy, Y0 + dx];
+        case 180: return [X0 + cw - dx, Y0 + ch - dy];
+        case 270: return [X0 + dy, Y0 + ch - dx];
+        default: return [X0 + dx, Y0 + dy];
+      }
+    };
     const boxes: OverlayBox[] = [];
     timeline.words.forEach((w, i) => {
       if (w.page !== page || !w.bbox) return;
+      const [ax0, ay0] = toUserSpace(w.bbox.x, w.bbox.y);
+      const [ax1, ay1] = toUserSpace(w.bbox.x + w.bbox.width, w.bbox.y + w.bbox.height);
       const r = viewport.convertToViewportRectangle([
-        w.bbox.x + ox,
-        w.bbox.y + oy,
-        w.bbox.x + w.bbox.width + ox,
-        w.bbox.y + w.bbox.height + oy,
+        Math.min(ax0, ax1), Math.min(ay0, ay1), Math.max(ax0, ax1), Math.max(ay0, ay1),
       ]);
       // Clamp the box to the page rectangle so the highlight can never spill into
       // the margins around the page — e.g. a word whose bbox sits slightly outside
