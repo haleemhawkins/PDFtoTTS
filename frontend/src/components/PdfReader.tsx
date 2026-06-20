@@ -136,14 +136,20 @@ export function PdfReader({
     if (!viewport) return [];
     const pageW = viewport.width;
     const pageH = viewport.height;
+    // PdfPig reports word boxes relative to the page's CropBox origin, but pdf.js
+    // paints (and convertToViewportRectangle maps) in full PDF user space — so on a
+    // PDF whose CropBox is inset from the MediaBox (a trim margin), every box lands
+    // offset by that origin and the highlight sits off the words. Shift each box by
+    // the CropBox lower-left (0,0 for the common no-crop case, so a no-op there).
+    const [ox, oy] = [viewport.viewBox[0], viewport.viewBox[1]];
     const boxes: OverlayBox[] = [];
     timeline.words.forEach((w, i) => {
       if (w.page !== page || !w.bbox) return;
       const r = viewport.convertToViewportRectangle([
-        w.bbox.x,
-        w.bbox.y,
-        w.bbox.x + w.bbox.width,
-        w.bbox.y + w.bbox.height,
+        w.bbox.x + ox,
+        w.bbox.y + oy,
+        w.bbox.x + w.bbox.width + ox,
+        w.bbox.y + w.bbox.height + oy,
       ]);
       // Clamp the box to the page rectangle so the highlight can never spill into
       // the margins around the page — e.g. a word whose bbox sits slightly outside
