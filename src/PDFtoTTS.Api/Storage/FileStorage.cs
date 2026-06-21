@@ -13,6 +13,8 @@ public interface IFileStorage
     Task<string> SaveOriginalAsync(Guid documentId, string extension, Stream content, CancellationToken ct);
     string AudioRelativePath(Guid sessionId, int chunkIndex);
     string AudioFullPath(Guid sessionId, int chunkIndex);
+    /// <summary>Absolute path to a session's audio directory (chunks + HLS segments).</summary>
+    string AudioSessionDir(Guid sessionId);
     /// <summary>Absolute path to a document's stored original (for serving/deletion).</summary>
     string OriginalFullPath(Guid documentId, DocumentType type);
     /// <summary>Delete a document's stored original; no-op if it's already gone.</summary>
@@ -47,6 +49,9 @@ public sealed class LocalFileStorage : IFileStorage
 
     public string AudioFullPath(Guid sessionId, int chunkIndex) =>
         Path.Combine(_dataDir, AudioRelativePath(sessionId, chunkIndex));
+
+    public string AudioSessionDir(Guid sessionId) =>
+        Path.Combine(_dataDir, "audio", sessionId.ToString());
 
     public string OriginalFullPath(Guid documentId, DocumentType type) =>
         Path.Combine(_dataDir, "originals", $"{documentId}{FileTypeDetector.Extension(type)}");

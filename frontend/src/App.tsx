@@ -5,6 +5,7 @@ import { LibraryView } from "./components/LibraryView";
 import { NavDrawer } from "./components/NavDrawer";
 import { ReaderChrome } from "./components/ReaderChrome";
 import { useReader } from "./hooks/useReader";
+import { setMediaMetadata } from "./audio/mediaSession";
 import { usePdfDocument } from "./pdf/usePdfDocument";
 import * as api from "./api/client";
 import type { DocumentInfo, Voice } from "./api/types";
@@ -78,6 +79,7 @@ export default function App() {
       setNav({ page, seq: 0 });
       setView("reader");
       setLastOpenedId(doc.id);
+      setMediaMetadata(doc.filename);
       await reader.open(doc.id, v, sp, page, word);
     } catch (e) {
       console.error("Failed to open document", e);
@@ -157,6 +159,7 @@ export default function App() {
     setRestoredPage(1);
     setNav({ page: 1, seq: 0 });
     setView("reader");
+    setMediaMetadata(f.name);
     void reader.start(f, v, s);
   };
 

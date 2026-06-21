@@ -1,7 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import * as api from "../api/client";
-import { AudioQueuePlayer } from "../audio/audioPlayer";
 import { ChunkQueue } from "../audio/chunkQueue";
+import { createPlaybackEngine, type PlaybackEngine } from "../audio/playbackEngine";
+import {
+  clearMediaSession, setMediaHandlers, setMediaPlaybackState, setMediaPositionState,
+} from "../audio/mediaSession";
 import type { ProcessedChunk, SourceWordData } from "../api/types";
 import { ReaderConnection } from "../signalr/readerConnection";
 import { activeWordIndex, buildTimeline, type Timeline } from "../sync/wordTimeline";
@@ -63,7 +66,7 @@ export function useReader(): ReaderController {
   const [ready, setReady] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const player = useRef<AudioQueuePlayer | null>(null);
+  const player = useRef<PlaybackEngine | null>(null);
   const queue = useRef(new ChunkQueue<ProcessedChunk>());
   const connection = useRef<ReaderConnection | null>(null);
   const raf = useRef<number | null>(null);
@@ -109,6 +112,8 @@ export function useReader(): ReaderController {
       const next = activeWordIndex(timelineRef.current.words, ms);
       return next === prev ? prev : next;
     });
+    // Keep the lock-screen scrubber tracking playback.
+    setMediaPositionState(timelineRef.current.totalMs, ms);
     raf.current = requestAnimationFrame(step);
   }, []);
 
@@ -134,7 +139,7 @@ export function useReader(): ReaderController {
     setReady(false); // no audio buffered yet for the new stream
 
     if (player.current) player.current.reset();
-    else player.current = new AudioQueuePlayer();
+    else player.current = createPlaybackEngine();
     player.current.onUnderrun = () => {
       setReady(false); // audio at the current position isn't buffered yet
       setState((s) => (s === "playing" ? "processing" : s));
@@ -151,6 +156,9 @@ export function useReader(): ReaderController {
 
     setState("processing");
     const session = await api.createSession(docId.current, voice, speed, "en", startWordIndex);
+    // Point the media-element engine at this session's stitched stream (no-op for
+    // the Web Audio engine, which receives audio per-chunk via ingest()).
+    player.current.setSource(api.streamUrl(session.id));
     connection.current = new ReaderConnection(session.id, {
       onChunk,
       onProgress: (p) => setProgress(p.progress),
@@ -241,6 +249,7 @@ export function useReader(): ReaderController {
     player.current?.dispose();
     player.current = null;
     wakeLock.current.release();
+    setMediaPlaybackState("none");
     if (raf.current !== null) {
       cancelAnimationFrame(raf.current);
       raf.current = null;
@@ -277,6 +286,10 @@ export function useReader(): ReaderController {
         if (state === "playing") void wakeLock.current.reacquire();
         return;
       }
+      // The media-element engine keeps playing while backgrounded/locked — that's
+      // the whole feature — so don't force a pause. (Genuine OS interruptions still
+      // route through the engine's onInterrupted.)
+      if (player.current?.continuesInBackground) return;
       if (!wasPlaying.current && state !== "playing") return;
       player.current?.pause();
       wasPlaying.current = false;
@@ -293,6 +306,7 @@ export function useReader(): ReaderController {
     player.current?.play();
     wasPlaying.current = true;
     setState("playing");
+    setMediaPlaybackState("playing");
     void wakeLock.current.acquire();
     if (raf.current === null) raf.current = requestAnimationFrame(tick);
   }, [tick]);
@@ -300,6 +314,7 @@ export function useReader(): ReaderController {
   const pause = useCallback(() => {
     player.current?.pause();
     wasPlaying.current = false;
+    setMediaPlaybackState("paused");
     wakeLock.current.release();
     // Stop the highlight loop while paused; otherwise it keeps recomputing the
     // active word from the player's (frozen) position and can fight navigation.
@@ -430,6 +445,25 @@ export function useReader(): ReaderController {
 
   const getPositionMs = useCallback(() => player.current?.currentMs() ?? 0, []);
 
+  // Wire lock-screen / Control Center transport controls to the reader. Handlers
+  // are stable useCallbacks, so this registers once. Next/Prev map to page turns.
+  useEffect(() => {
+    setMediaHandlers({
+      play,
+      pause,
+      seekTo: (ms) => seekToMs(ms),
+      seekBy: (delta) => seekToMs(Math.max(0, getPositionMs() + delta)),
+      nextTrack: () => {
+        const page = timelineRef.current.words[activeIndexRef.current]?.page;
+        if (page != null) jumpToPage(page + 1);
+      },
+      prevTrack: () => {
+        const page = timelineRef.current.words[activeIndexRef.current]?.page;
+        if (page != null && page > 1) jumpToPage(page - 1);
+      },
+    });
+  }, [play, pause, seekToMs, getPositionMs, jumpToPage]);
+
   useEffect(() => {
     const wl = wakeLock.current; // stable instance; capture for the cleanup closure
     return () => {
@@ -438,6 +472,7 @@ export function useReader(): ReaderController {
       void connection.current?.stop();
       player.current?.dispose();
       wl.release();
+      clearMediaSession();
     };
   }, []);
 

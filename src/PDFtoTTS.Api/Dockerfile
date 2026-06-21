@@ -25,6 +25,7 @@ WORKDIR /app
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         ocrmypdf tesseract-ocr-eng tesseract-ocr-osd curl ca-certificates \
+        ffmpeg \
     && ENG="$(dpkg -L tesseract-ocr-eng | grep '/eng.traineddata$')" \
     && curl -fsSL -o "$ENG" \
         https://github.com/tesseract-ocr/tessdata_best/raw/main/eng.traineddata \

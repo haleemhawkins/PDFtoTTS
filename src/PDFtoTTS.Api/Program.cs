@@ -1,4 +1,5 @@
 using System.Text.Json.Serialization;
+using PDFtoTTS.Api.Audio;
 using PDFtoTTS.Api.Contracts;
 using PDFtoTTS.Api.Documents;
 using PDFtoTTS.Api.Grpc;
@@ -53,6 +54,7 @@ else
 
 // Text pipeline + orchestration.
 builder.Services.AddSingleton<TextNormalizer>();
+builder.Services.AddSingleton<HlsTranscoder>();
 builder.Services.AddSingleton<ChunkMerger>();
 builder.Services.AddSingleton<SynthesisOrchestrator>();
 builder.Services.AddSingleton<PdfExtractor>();
@@ -219,6 +221,48 @@ app.MapGet("/api/sessions/{id:guid}/chunks/{index:int}/audio", (Guid id, int ind
     return File.Exists(path)
         ? Results.File(path, "audio/wav", enableRangeProcessing: true)
         : Results.NotFound();
+});
+
+// HLS playlist + segments — the iOS background-playback path. Safari plays this
+// natively via AVPlayer, which keeps audio alive with the screen locked and drives
+// the lock-screen controls. Segments are transcoded from the WAV chunks on demand.
+app.MapGet("/api/sessions/{id:guid}/hls/{name}", async (Guid id, string name, HttpContext ctx,
+    ISessionStore sessions, HlsTranscoder hls) =>
+{
+    if (sessions.Get(id) is not { } s)
+    {
+        ctx.Response.StatusCode = StatusCodes.Status404NotFound;
+        return;
+    }
+
+    if (name == "playlist.m3u8")
+    {
+        // Don't hand back an empty playlist — Safari caches it and gives up. Wait
+        // for the first segment to exist (or synthesis to end / client to leave).
+        await hls.WaitForFirstSegmentAsync(s, ctx.RequestAborted);
+        // The playlist grows as chunks arrive, so it must never be cached.
+        ctx.Response.Headers.CacheControl = "no-cache, no-store, must-revalidate";
+        ctx.Response.ContentType = "application/vnd.apple.mpegurl";
+        await ctx.Response.WriteAsync(hls.BuildPlaylist(s), ctx.RequestAborted);
+        return;
+    }
+
+    if (name.EndsWith(".ts", StringComparison.Ordinal) &&
+        int.TryParse(name[..^3], out int index))
+    {
+        string? path = await hls.EnsureSegmentAsync(id, index, ctx.RequestAborted);
+        if (path is null)
+        {
+            ctx.Response.StatusCode = StatusCodes.Status404NotFound;
+            return;
+        }
+        // Segments are immutable once produced — let the client/CDN cache them.
+        ctx.Response.Headers.CacheControl = "public, max-age=31536000, immutable";
+        await Results.File(path, "video/mp2t", enableRangeProcessing: true).ExecuteAsync(ctx);
+        return;
+    }
+
+    ctx.Response.StatusCode = StatusCodes.Status404NotFound;
 });
 
 app.MapDelete("/api/sessions/{id:guid}", (Guid id, ISessionStore sessions, IFileStorage files) =>

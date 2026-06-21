@@ -4,7 +4,14 @@
  * exposed for the sync engine. On an underrun (next chunk not yet decoded) it
  * pauses and resumes automatically when the chunk arrives — it never skips.
  */
-export class AudioQueuePlayer {
+import type { PlaybackEngine } from "./playbackEngine";
+
+export class AudioQueuePlayer implements PlaybackEngine {
+  readonly kind = "webaudio" as const;
+  /** Web Audio is suspended by iOS on lock/background — it cannot play in the
+   *  background (that's what MediaElementPlayer is for). */
+  readonly continuesInBackground = false;
+
   private readonly ctx: AudioContext;
   private readonly buffers = new Map<number, AudioBuffer>();
   private readonly durationsMs = new Map<number, number>();
@@ -50,6 +57,10 @@ export class AudioQueuePlayer {
       }
     };
   }
+
+  /** No-op: the Web Audio engine receives audio per-chunk via {@link ingest},
+   *  not from a single stream URL. (Part of the {@link PlaybackEngine} contract.) */
+  setSource(): void {}
 
   /** Decode and buffer a chunk; recover from an underrun if we were waiting on it. */
   async ingest(chunkIndex: number, url: string, durationMs: number): Promise<void> {

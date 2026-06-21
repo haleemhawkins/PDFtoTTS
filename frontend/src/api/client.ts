@@ -117,6 +117,13 @@ export async function getSession(id: string): Promise<TtsSession> {
   return asJson(await fetch(`/api/sessions/${id}`));
 }
 
+/** URL of a session's HLS playlist — the source for the media-element playback
+ *  engine on iOS. Safari plays HLS natively (AVPlayer), which is what keeps audio
+ *  going while the screen is locked and drives the lock-screen controls. */
+export function streamUrl(sessionId: string): string {
+  return `/api/sessions/${sessionId}/hls/playlist.m3u8`;
+}
+
 export async function getChunks(id: string): Promise<ProcessedChunk[]> {
   return asJson(await fetch(`/api/sessions/${id}/chunks`));
 }
