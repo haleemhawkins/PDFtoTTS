@@ -1,0 +1,170 @@
+name: pdftotts
+
+# Shared ROCm passthrough for the two GPU workers. The RX 7800 XT (gfx1101) is
+# spoofed as the supported gfx1100 via HSA_OVERRIDE_GFX_VERSION (design §8.2).
+x-rocm: &rocm
+  devices:
+    - /dev/kfd
+    - /dev/dri
+  # Numeric host GIDs (video=985, render=989) rather than names: the rocm/pytorch
+  # base image lacks a "render" group by name, which breaks group_add. GIDs are
+  # what the kernel checks for /dev/kfd + /dev/dri access regardless.
+  group_add:
+    - "985"
+    - "989"
+  security_opt:
+    - seccomp:unconfined
+  ipc: host
+
+services:
+  kokoro-tts:
+    build:
+      context: .
+      dockerfile: workers/kokoro-tts/Dockerfile
+    <<: *rocm
+    environment:
+      HSA_OVERRIDE_GFX_VERSION: "11.0.0"
+      HIP_VISIBLE_DEVICES: "0"
+      GRPC_PORT: "50051"
+      DATA_DIR: "/data"
+      # GPU synthesis is fast; the worker serializes by default. Set MAX_CONCURRENCY
+      # to override (e.g. CPU fallback or multi-GPU). HF model + MIOpen kernel
+      # caches live on the modelcache volume (HF_HOME/MIOPEN_* set in the Dockerfile).
+    volumes:
+      - appdata:/data
+      - modelcache:/models
+    # Cap host RAM so a synth spike (Kokoro is CPU-only here, so it lives in system
+    # RAM, not VRAM) gets OOM-killed inside this container — recovered via the
+    # restart policy below — instead of freezing/crashing the whole desktop. Raise
+    # if you see the container get OOM-killed mid-synth (docker logs / exit 137).
+    mem_limit: 5g
+    healthcheck:
+      test: ["CMD", "python3", "-m", "worker.healthcheck"]
+      interval: 10s
+      timeout: 5s
+      retries: 24
+      start_period: 300s
+    restart: unless-stopped
+
+  whisperx-align:
+    build:
+      context: .
+      dockerfile: workers/whisperx-align/Dockerfile
+    <<: *rocm
+    environment:
+      HSA_OVERRIDE_GFX_VERSION: "11.0.0"
+      HIP_VISIBLE_DEVICES: "0"
+      GRPC_PORT: "50052"
+      DATA_DIR: "/data"
+      ALIGN_LANGUAGE: "en"
+      ALIGN_DEVICE: "cuda"
+      ALIGN_CONFIDENCE_THRESHOLD: "0.30"
+      MAX_CONCURRENCY: "1"
+      HF_HOME: "/models/hf"  # cache wav2vec2 downloads on the modelcache volume
+      # Heuristic MIOpen kernel selection (same as kokoro): alignment runs over
+      # variable-length audio, and the default per-shape tuning search makes each
+      # align take ~100s once Kokoro also shares the GPU. FAST + a persisted,
+      # SEPARATE kernel cache keeps alignment ~1-2s.
+      MIOPEN_FIND_MODE: "FAST"
+      MIOPEN_USER_DB_PATH: "/models/miopen-wx"
+      MIOPEN_CUSTOM_CACHE_DIR: "/models/miopen-wx"
+    volumes:
+      - appdata:/data
+      - modelcache:/models
+    # Same blast-radius cap as kokoro: OOM-kill this container, not the host. The
+    # wav2vec2 align model + PyTorch fit comfortably under this; raise on exit 137.
+    mem_limit: 4g
+    healthcheck:
+      test: ["CMD", "python", "-m", "worker.healthcheck"]
+      interval: 10s
+      timeout: 5s
+      retries: 18
+      start_period: 180s
+    restart: unless-stopped
+
+  surya-ocr:
+    build:
+      context: .
+      dockerfile: workers/surya-ocr/Dockerfile
+    <<: *rocm
+    environment:
+      HSA_OVERRIDE_GFX_VERSION: "11.0.0"
+      HIP_VISIBLE_DEVICES: "0"
+      GRPC_PORT: "50053"
+      DATA_DIR: "/data"
+      OCR_DEVICE: "cuda"
+      # Render DPI for OCR. 300 is the accuracy sweet spot; lower for tight memory.
+      OCR_RENDER_DPI: "300"
+      # Per-page preprocessing before recognition: deskew + CLAHE contrast on by
+      # default; OCR_DENOISE / OCR_BINARIZE are opt-in (can hurt neural OCR).
+      OCR_PREPROCESS: "1"
+      MAX_CONCURRENCY: "1"
+      HF_HOME: "/models/hf"  # cache Surya model downloads on the modelcache volume
+      MIOPEN_FIND_MODE: "FAST"
+      MIOPEN_USER_DB_PATH: "/models/miopen-surya"
+      MIOPEN_CUSTOM_CACHE_DIR: "/models/miopen-surya"
+    volumes:
+      - appdata:/data
+      - modelcache:/models
+    # Surya's detection+recognition models fit comfortably; raise on exit 137.
+    mem_limit: 6g
+    healthcheck:
+      test: ["CMD", "python", "-m", "worker.healthcheck"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 300s
+    restart: unless-stopped
+
+  api:
+    build:
+      context: .
+      dockerfile: src/PDFtoTTS.Api/Dockerfile
+    environment:
+      ASPNETCORE_URLS: "http://+:8080"
+      KOKORO_GRPC: "http://kokoro-tts:50051"
+      WHISPERX_GRPC: "http://whisperx-align:50052"
+      SURYA_GRPC: "http://surya-ocr:50053"
+      DATA_DIR: "/data"
+      # Pipeline concurrency auto-derives from the host's cores (~cores/3) to match
+      # Kokoro's parallel synth slots; the orchestrator runs the first chunk alone
+      # for fast first-audio, then opens up. Set PIPELINE_CONCURRENCY to override.
+      # Smaller chunks -> first audio is ready in seconds (not ~45s for one giant
+      # 350-token chunk) and progress advances visibly per chunk. ~120 tokens is
+      # roughly a few sentences.
+      MAX_TOKENS_PER_CHUNK: "120"
+      # The FIRST chunk is tiny so audio starts in ~5s; later chunks stay at 120
+      # to keep per-chunk synth+align overhead low.
+      FIRST_CHUNK_TOKENS: "30"
+      # Cap parallel synth+align chunks. The cores/3 auto-default (=4 on a 12-core
+      # host) thrashes when Kokoro runs CPU-only and multiplies peak RAM, which can
+      # OOM-crash a memory-tight desktop. The first chunk always runs alone for fast
+      # first-audio, so 2 keeps throughput while roughly halving the memory spike.
+      PIPELINE_CONCURRENCY: "2"
+    ports:
+      - "8080:8080"
+    # Bound the API's RAM so a runaway can't take the host down with it.
+    mem_limit: 1g
+    volumes:
+      - appdata:/data
+    depends_on:
+      kokoro-tts:
+        condition: service_healthy
+      whisperx-align:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # Serves the built React SPA via nginx and proxies /api + /hubs to the api.
+  frontend:
+    build:
+      context: ./frontend
+    ports:
+      - "5173:80"
+    depends_on:
+      api:
+        condition: service_started
+    restart: unless-stopped
+
+volumes:
+  appdata:
+  modelcache:

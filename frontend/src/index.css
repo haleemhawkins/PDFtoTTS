@@ -1,0 +1,85 @@
+/* Base typography + page chrome. App-specific surfaces live in App.css; this is
+   the shell the app renders into — dark by default, following the OS light/dark
+   setting (App.css carries the matching app tokens for each scheme). */
+:root {
+  --text-h: #f3f4f6;
+  --bg: #16171d;
+  --border: #2e303a;
+
+  --sans: system-ui, 'Segoe UI', Roboto, sans-serif;
+
+  font: 17px/1.5 var(--sans);
+  /* Follow the OS light/dark setting (App.css carries the matching app tokens). */
+  color-scheme: light dark;
+  color: #e8e8ea;
+  background: var(--bg);
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+
+  @media (max-width: 1024px) {
+    font-size: 16px;
+  }
+}
+
+@media (prefers-color-scheme: light) {
+  :root {
+    --text-h: #111317;
+    --bg: #f4f4f6;
+    --border: #dcdce1;
+    color: #1d1d1f;
+  }
+
+  #root {
+    border-color: var(--border);
+  }
+}
+
+#root {
+  /* Mobile-first: fill the viewport. (Was a leftover fixed width from the Vite
+     starter — a desktop-fixed width can confuse WebKit's shrink-to-fit and zoom
+     the whole PWA out.) Desktop width is handled by .app's max-width. */
+  width: 100%;
+  max-width: 100%;
+  margin: 0 auto;
+  min-height: 100svh;
+  display: flex;
+  flex-direction: column;
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  /* A stray wide child must never widen the document — on iOS a horizontal
+     overflow makes the browser shrink-to-fit (the whole UI "zooms out"). */
+  overflow-x: hidden;
+}
+
+h1,
+h2 {
+  font-family: var(--sans);
+  font-weight: 600;
+  color: var(--text-h);
+}
+
+h1 {
+  font-size: 32px;
+  letter-spacing: -0.5px;
+  margin: 0;
+  @media (max-width: 1024px) {
+    font-size: 26px;
+  }
+}
+
+h2 {
+  font-size: 22px;
+  line-height: 1.2;
+  letter-spacing: -0.2px;
+  margin: 0 0 8px;
+}
+
+p {
+  margin: 0;
+}

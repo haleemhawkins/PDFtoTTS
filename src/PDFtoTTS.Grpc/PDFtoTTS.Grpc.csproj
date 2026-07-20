@@ -1,0 +1,27 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Google.Protobuf" Version="3.28.3" />
+    <PackageReference Include="Grpc.Net.ClientFactory" Version="2.67.0" />
+    <PackageReference Include="Grpc.Tools" Version="2.68.1">
+      <PrivateAssets>all</PrivateAssets>
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+    </PackageReference>
+  </ItemGroup>
+
+  <!--
+    Generate C# gRPC *client* stubs from the language-neutral contracts in
+    /proto. ProtoRoot makes the `import "common.proto";` statements resolve.
+    The API is a client to both the Kokoro and WhisperX workers.
+  -->
+  <ItemGroup>
+    <Protobuf Include="..\..\proto\*.proto" ProtoRoot="..\..\proto" GrpcServices="Client" />
+  </ItemGroup>
+
+</Project>

@@ -1,0 +1,13 @@
+# Runtime deps. torch (ROCm) comes from the base image (rocm/pytorch, torch
+# 2.6.0+rocm, compiled against NumPy 1.x). Two pins keep that base intact:
+#   - whisperx 3.5+ hard-pins torch~=2.8.0 -> pip pulls the CUDA torch wheel and
+#     clobbers the ROCm build. 3.4.5 was the newest that kept torch, BUT its dep
+#     tree forces numpy>=2, which the NumPy-1.x-compiled torch can't bridge to
+#     ("Numpy is not available"). 3.3.1 is the newest whisperx satisfied by both
+#     torch 2.6 AND numpy<2.
+#   - numpy<2: belt-and-suspenders so no transitive dep drags numpy 2.x back in.
+grpcio>=1.68
+grpcio-tools>=1.68
+numpy>=1.26,<2
+soundfile>=0.12
+whisperx==3.3.1

@@ -1,0 +1,99 @@
+namespace PDFtoTTS.Core.Models;
+
+/// <summary>Source format of an uploaded document.</summary>
+public enum DocumentType
+{
+    Pdf,
+    Epub
+}
+
+/// <summary>Lifecycle of an uploaded document's text extraction.</summary>
+public enum DocumentStatus
+{
+    Queued,
+    Extracting,
+    Ready,
+    Error
+}
+
+/// <summary>Lifecycle of a TTS render session.</summary>
+public enum SessionStatus
+{
+    Queued,
+    Processing,
+    Streaming,
+    Complete,
+    Error
+}
+
+/// <summary>
+/// A word's box in PDF user space (origin bottom-left). Null for reflowable
+/// EPUB, where on-screen position is resolved client-side.
+/// </summary>
+public readonly record struct BoundingBox(double X, double Y, double Width, double Height);
+
+/// <summary>
+/// A single source word: its on-screen anchor (page + bbox) and, once aligned,
+/// its spoken time window. <see cref="Index"/> is the global, document-wide word
+/// index that the frontend uses to map highlights back to rendered words.
+/// </summary>
+public sealed record WordData(
+    int Index,
+    string Text,
+    long StartMs,
+    long EndMs,
+    int? Page,
+    BoundingBox? Bbox,
+    float Confidence = 1f);
+
+/// <summary>
+/// One synthesized + aligned chunk pushed to the client. <see cref="Degraded"/>
+/// marks chunks whose timings were partly interpolated (low confidence or a
+/// token-count mismatch) rather than fully aligned.
+/// </summary>
+public sealed record ProcessedChunk(
+    int ChunkIndex,
+    string AudioUrl,
+    long DurationMs,
+    IReadOnlyList<WordData> Words,
+    bool Degraded = false);
+
+/// <summary>The reader's last position in a document, persisted server-side so a
+/// returning reader resumes the same spot on any device/browser (not just the one
+/// that stored it locally). <see cref="Page"/> is 1-based (the PDF page; 1 for
+/// EPUB), <see cref="Word"/> is the global source-word index, and
+/// <see cref="UpdatedAtMs"/> is the writing client's Unix-ms timestamp — used for
+/// last-writer-wins when two devices report divergent positions.</summary>
+public sealed record ReadingPosition(
+    int Page = 1,
+    int Word = 0,
+    string? Voice = null,
+    float Speed = 1f,
+    long UpdatedAtMs = 0);
+
+/// <summary>An uploaded document and its extraction status.</summary>
+/// <param name="Progress">Extraction/OCR progress in [0,1] while <see cref="DocumentStatus.Extracting"/>.
+/// Drives the client's "Preparing document…" progress bar; 0 when not OCR'ing.</param>
+/// <param name="Position">The reader's last resume point, or null if never opened.</param>
+public sealed record Document(
+    Guid Id,
+    string Filename,
+    DocumentType Type,
+    int PageCount,
+    int WordCount,
+    DocumentStatus Status,
+    double Progress = 0,
+    ReadingPosition? Position = null);
+
+/// <summary>A TTS render session over a document with chosen voice/speed.</summary>
+public sealed record TtsSession(
+    Guid Id,
+    Guid DocumentId,
+    string Voice,
+    float Speed,
+    string Language,
+    SessionStatus Status,
+    double Progress);
+
+/// <summary>A selectable TTS voice (mirrors the gRPC Voice message).</summary>
+public sealed record Voice(string Id, string Label, string Language, string Gender);

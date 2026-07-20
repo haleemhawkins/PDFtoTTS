@@ -1,0 +1,22 @@
+# Runtime deps. torch (ROCm) comes from the base image (rocm/pytorch); it is NOT
+# listed here and must NOT be reinstalled — the Dockerfile pins it via a generated
+# pip constraint so installing surya can't silently swap in a CUDA torch wheel
+# (the same failure mode documented in the whisperx worker). If surya hard-requires
+# a torch the base doesn't provide, the build fails loudly instead of producing a
+# GPU-less image.
+grpcio>=1.68
+grpcio-tools>=1.68
+pypdfium2>=4.30
+pillow>=10.0
+# The base image's ROCm torch is compiled against NumPy 1.x; NumPy 2.x makes every
+# torch<->numpy conversion raise "Numpy is not available", which breaks Surya
+# inference. Pin <2 (same constraint the whisperx worker carries). Surya pulls
+# numpy 2 transitively otherwise.
+numpy>=1.26,<2
+# Surya OCR (imports as `surya`). Fast-moving project; the backend is written
+# defensively against minor API drift, but a major bump may need code changes.
+surya-ocr==0.14.1
+# Surya 0.14.1 declares `transformers` with no upper bound, so pip grabs the latest
+# (4.57), which removed `QuantizedCacheConfig` in its 4.55 cache refactor and breaks
+# `surya.recognition`'s import. Pin to the range that still exports it.
+transformers>=4.45,<4.52

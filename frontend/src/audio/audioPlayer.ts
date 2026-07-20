@@ -1,0 +1,220 @@
+/**
+ * Streamed audio playback via Web Audio (design §6.4/§6.5). Chunks are decoded
+ * and played in order; the global playback position (in unscaled audio ms) is
+ * exposed for the sync engine. On an underrun (next chunk not yet decoded) it
+ * pauses and resumes automatically when the chunk arrives — it never skips.
+ */
+import type { PlaybackEngine } from "./playbackEngine";
+
+export class AudioQueuePlayer implements PlaybackEngine {
+  readonly kind = "webaudio" as const;
+  /** Web Audio is suspended by iOS on lock/background — it cannot play in the
+   *  background (that's what MediaElementPlayer is for). */
+  readonly continuesInBackground = false;
+
+  private readonly ctx: AudioContext;
+  private readonly buffers = new Map<number, AudioBuffer>();
+  private readonly durationsMs = new Map<number, number>();
+
+  private playing = false;
+  private rate = 1;
+  private cursor = 0; // next chunk index to play
+  private currentChunk = -1;
+  private source: AudioBufferSourceNode | null = null;
+  private chunkStartCtxTime = 0;
+  private chunkStartOffsetMs = 0; // offset into the current chunk we started at
+  private playedBeforeMs = 0; // global ms of fully-played chunks
+
+  onUnderrun?: () => void;
+  onResumed?: () => void;
+  /** Fired when the chunk at the current cursor is buffered, i.e. playback can
+   *  start emitting audio immediately. Drives enabling the Play button. */
+  onReady?: () => void;
+  /** Fired when the OS interrupts/suspends the context mid-playback (backgrounding
+   *  a PWA, an incoming call). We capture the position and stop cleanly so resume
+   *  is an explicit Play tap from exactly where we left off — never auto-restart. */
+  onInterrupted?: () => void;
+
+  constructor() {
+    this.ctx = new AudioContext();
+    // iOS silences the Web Audio API when the device is in Ring/Silent mode (even
+    // though <video> still plays — different audio category), so the reader is
+    // mute-switched off with no error. The Audio Session API (Safari 16.4+) lets
+    // us opt into the "playback" category so audio plays regardless, like video.
+    const nav = navigator as Navigator & { audioSession?: { type: string } };
+    if (nav.audioSession) nav.audioSession.type = "playback";
+
+    // iOS interrupts/suspends the AudioContext when the PWA is backgrounded. The
+    // playing source ends and our cursor would otherwise run out the buffer while
+    // `playing` stayed true — leaving Play a no-op and freshly-synthesized chunks
+    // auto-starting on return. Treat any interruption-while-playing as a clean
+    // pause so the position is captured and resume waits for an explicit tap.
+    this.ctx.onstatechange = () => {
+      const s = this.ctx.state as string;
+      if (this.playing && (s === "interrupted" || s === "suspended")) {
+        this.pause();
+        this.onInterrupted?.();
+      }
+    };
+  }
+
+  /** No-op: the Web Audio engine receives audio per-chunk via {@link ingest},
+   *  not from a single stream URL. (Part of the {@link PlaybackEngine} contract.) */
+  setSource(): void {}
+
+  /** Decode and buffer a chunk; recover from an underrun if we were waiting on it. */
+  async ingest(chunkIndex: number, url: string, durationMs: number): Promise<void> {
+    this.durationsMs.set(chunkIndex, durationMs);
+    const data = await fetch(url).then((r) => r.arrayBuffer());
+    this.buffers.set(chunkIndex, await this.decode(data));
+    if (chunkIndex === this.cursor) this.onReady?.();
+    if (this.playing && this.source === null && chunkIndex === this.cursor) {
+      this.onResumed?.();
+      this.startCurrent(this.chunkStartOffsetMs);
+    }
+  }
+
+  /**
+   * Decode using the CALLBACK form of decodeAudioData. iOS/older Safari do not
+   * support the promise-returning overload — `await ctx.decodeAudioData(data)`
+   * resolves to undefined there, so chunks never buffer and the player underruns
+   * forever (UI stuck on "processing", no audio). The callback form works across
+   * all browsers; a decode failure rejects so callers can surface it.
+   */
+  private decode(data: ArrayBuffer): Promise<AudioBuffer> {
+    return new Promise<AudioBuffer>((resolve, reject) =>
+      this.ctx.decodeAudioData(data, resolve, reject),
+    );
+  }
+
+  play(): void {
+    if (this.playing) return;
+    this.playing = true;
+    // iOS starts the context suspended; resume() must run inside the click
+    // gesture (it does — play() is called from the Play button handler).
+    void this.ctx.resume();
+    // Resume from where we paused/seeked to — NOT the start of the chunk.
+    if (this.source === null) this.startCurrent(this.chunkStartOffsetMs);
+  }
+
+  pause(): void {
+    if (!this.playing) return;
+    // Capture position, tear down the source so resume restarts cleanly.
+    const within = this.currentWithinMs();
+    this.playedBeforeMs = this.cumulativeOffsetMs(this.currentChunk);
+    this.chunkStartOffsetMs = within;
+    this.stopSource();
+    this.playing = false;
+  }
+
+  setRate(rate: number): void {
+    this.rate = rate;
+    if (this.source) this.source.playbackRate.value = rate;
+  }
+
+  /** Current global position in unscaled audio milliseconds. */
+  currentMs(): number {
+    if (this.currentChunk < 0) return this.playedBeforeMs;
+    return this.cumulativeOffsetMs(this.currentChunk) + this.currentWithinMs();
+  }
+
+  /** Seek to a global position; needs the per-chunk offsets from the timeline. */
+  seek(globalMs: number, chunkOffsets: Map<number, number>): void {
+    let target = 0;
+    let offset = 0;
+    for (const [index, start] of [...chunkOffsets.entries()].sort((a, b) => a[0] - b[0])) {
+      if (start <= globalMs) {
+        target = index;
+        offset = start;
+      }
+    }
+    this.stopSource();
+    this.cursor = target;
+    this.playedBeforeMs = offset;
+    this.currentChunk = -1;
+    // Always record the within-chunk offset so play()/underrun recovery resume
+    // exactly at the seeked word, even if the target chunk isn't decoded yet.
+    this.chunkStartOffsetMs = globalMs - offset;
+    // Re-evaluate readiness for the new cursor: ready iff its audio is buffered.
+    if (this.buffers.has(this.cursor)) this.onReady?.();
+    if (this.playing) this.startCurrent(this.chunkStartOffsetMs);
+  }
+
+  /** Drop all buffered audio and rewind to the start, KEEPING the AudioContext
+   *  (so iOS stays unlocked). Used when a new session's stream replaces the old
+   *  one, e.g. re-synthesizing at a different speed. */
+  reset(): void {
+    this.stopSource();
+    this.buffers.clear();
+    this.durationsMs.clear();
+    this.playing = false;
+    this.rate = 1;
+    this.cursor = 0;
+    this.currentChunk = -1;
+    this.chunkStartOffsetMs = 0;
+    this.playedBeforeMs = 0;
+  }
+
+  dispose(): void {
+    this.stopSource();
+    void this.ctx.close();
+  }
+
+  // --- internals ----------------------------------------------------------
+
+  private startCurrent(withinMs: number): void {
+    // Record the intended start offset up front so underrun recovery (ingest)
+    // resumes this chunk at the right place rather than a stale offset.
+    this.chunkStartOffsetMs = withinMs;
+    const buffer = this.buffers.get(this.cursor);
+    if (!buffer) {
+      this.source = null;
+      this.currentChunk = -1;
+      this.onUnderrun?.();
+      return;
+    }
+
+    const src = this.ctx.createBufferSource();
+    src.buffer = buffer;
+    src.playbackRate.value = this.rate;
+    src.connect(this.ctx.destination);
+    src.onended = () => {
+      if (src !== this.source) return; // superseded by seek/pause
+      this.playedBeforeMs = this.cumulativeOffsetMs(this.cursor) +
+        (this.durationsMs.get(this.cursor) ?? buffer.duration * 1000);
+      this.cursor += 1;
+      this.source = null;
+      this.currentChunk = -1;
+      if (this.playing) this.startCurrent(0);
+    };
+
+    this.currentChunk = this.cursor;
+    this.chunkStartCtxTime = this.ctx.currentTime;
+    src.start(0, withinMs / 1000);
+    this.source = src;
+  }
+
+  private stopSource(): void {
+    if (this.source) {
+      this.source.onended = null;
+      try {
+        this.source.stop();
+      } catch {
+        /* not started */
+      }
+      this.source = null;
+    }
+  }
+
+  private currentWithinMs(): number {
+    if (!this.source) return this.chunkStartOffsetMs;
+    const elapsed = (this.ctx.currentTime - this.chunkStartCtxTime) * 1000 * this.rate;
+    return this.chunkStartOffsetMs + elapsed;
+  }
+
+  private cumulativeOffsetMs(chunkIndex: number): number {
+    let total = 0;
+    for (let i = 0; i < chunkIndex; i++) total += this.durationsMs.get(i) ?? 0;
+    return total;
+  }
+}

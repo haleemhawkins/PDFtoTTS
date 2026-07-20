@@ -64,21 +64,26 @@ time (or the merged source-word set for multi-token words).
 
 ### Requirement: Auto-scroll to active word
 
-The frontend SHALL keep the active word visible, scrolling the document viewport
-(or turning the EPUB page) when the active word moves outside a configurable
-visible margin, using smooth scrolling that does not fight manual user scrolling.
+The frontend SHALL keep the active word visible while it advances: whenever the
+active word CHANGES (playback advancing, or a seek/tap), the viewport SHALL
+smoothly re-center on it — following the voice wins over a recent manual scroll,
+so the reader can never drift away from where reading is happening. When the
+active word has NOT changed but its on-screen boxes were rebuilt (a streamed
+chunk arriving, a page-turn settling), the viewport SHALL scroll only if the word
+is off-screen and the user has not manually scrolled within a short grace period.
 
-#### Scenario: Off-screen word scrolls into view
+#### Scenario: Playback always follows the voice
 
-- **WHEN** the active word advances below the visible area
-- **THEN** the viewport smoothly scrolls so the active word is back within the
-  margin
+- **WHEN** the active word advances during playback, even after the user scrolled
+  away to skim elsewhere
+- **THEN** the viewport smoothly re-centers on the newly spoken word
 
-#### Scenario: Manual scroll temporarily suspends auto-scroll
+#### Scenario: Manual scroll while paused is respected
 
-- **WHEN** the user manually scrolls away during playback
-- **THEN** auto-scroll is suspended for a short grace period and then resumes
-  following the active word
+- **WHEN** the user scrolls away while paused and a streamed chunk redraws the
+  word boxes (no active-word change)
+- **THEN** the viewport stays where the user put it for the grace period rather
+  than snapping back
 
 ### Requirement: Playback controls
 
@@ -106,8 +111,9 @@ playback state, and SHALL surface processing progress and recoverable errors.
 #### Scenario: Processing shows progress
 
 - **WHEN** the session is `processing`
-- **THEN** the UI shows a progress indicator reflecting `Progress` events and
-  enables play once the first chunk is ready
+- **THEN** the UI shows a progress indicator reflecting `Progress` events, shows
+  a loading state on the play control while audio at the current position is not
+  yet buffered, and enables (and visually cues) the play control once it is ready
 
 #### Scenario: Connection loss is recoverable
 
@@ -115,3 +121,93 @@ playback state, and SHALL surface processing progress and recoverable errors.
 - **THEN** the UI enters a reconnecting state, automatically re-subscribes on
   reconnect, backfills missed chunks, and resumes without losing playback
   position
+
+### Requirement: Playback starts only on explicit intent
+
+Audio SHALL begin only on an explicit user Play tap or a playback-initiated
+continuation (auto page-turn while already playing); it SHALL NOT auto-start when
+a document first finishes/produces audio, when newly synthesized chunks arrive
+while paused, on restore, or when manually navigating. The play control SHALL be
+disabled while the audio at the current position is not yet buffered, and SHALL
+indicate the loading-vs-ready transition so a single tap starts read-out.
+
+#### Scenario: Ready audio does not auto-play
+
+- **WHEN** synthesis produces playable audio for the current position and the
+  user has not pressed Play
+- **THEN** playback does not start; the play control becomes enabled and cues
+  "ready", and one tap begins read-out from that position
+
+#### Scenario: Chunk completing while paused stays silent
+
+- **WHEN** the reader is paused and a freshly synthesized chunk arrives
+- **THEN** no audio plays until the user taps Play
+
+### Requirement: Resume position across backgrounding and reload
+
+The reader SHALL preserve playback position when interrupted. When the app is
+backgrounded or its audio context is interrupted, it SHALL pause cleanly at the
+current position and remain paused on return (no auto-resume). It SHALL persist
+the exact word being read so that a full reload resumes at that word (re-synthesizing
+from there), not merely the page.
+
+#### Scenario: Return from background resumes from the same spot
+
+- **WHEN** the app is backgrounded mid-playback and later reopened
+- **THEN** it is paused at the word it left off on, and tapping Play resumes from
+  exactly there without having auto-played on return
+
+#### Scenario: Full reload resumes at the exact word
+
+- **WHEN** the app is reopened after the page was unloaded
+- **THEN** it restores the document and lands paused at the exact saved word
+  (highlighted), synthesizing from that word
+
+### Requirement: Manual navigation preloads without auto-playing
+
+Manually flipping pages (Prev/Next) or selecting a page/chapter SHALL position
+the reader at the target page's first word and preload its audio, but SHALL NOT
+start playback. Rapid flipping SHALL be debounced so it does not start and cancel
+a synthesis for every intermediate page. Playback-initiated page turns (the
+active word crossing into a new page) SHALL continue reading uninterrupted.
+
+#### Scenario: Manual page flip stays paused
+
+- **WHEN** the user taps Next while paused
+- **THEN** the view shows the next page, audio for it is prepared, and reading
+  does not begin until the user taps Play
+
+#### Scenario: Auto page-turn keeps reading
+
+- **WHEN** playback advances past the end of a page
+- **THEN** the next page is shown and reading continues without interruption
+
+### Requirement: Page and chapter navigation surface
+
+The frontend SHALL provide a navigation surface to jump to a location visually:
+a grid of page thumbnails (rendered lazily for performance) and, when the
+document exposes an outline, a list of chapters that resolve to pages. Selecting
+a thumbnail or chapter SHALL navigate the reader there (paused, preloaded).
+
+#### Scenario: Jump by page thumbnail
+
+- **WHEN** the user opens the navigation surface and selects a page thumbnail
+- **THEN** the reader navigates to that page and the surface closes
+
+#### Scenario: Jump by chapter
+
+- **WHEN** the document has an embedded outline and the user selects a chapter
+- **THEN** the reader navigates to that chapter's page; if no outline exists, the
+  chapter list is absent/empty and page navigation remains available
+
+### Requirement: Immersive, low-chrome reading
+
+The frontend SHALL consolidate transport controls into a single compact bar and
+SHALL maximize reading area by auto-hiding chrome during playback, revealing it
+on a tap, so document content occupies the screen while reading.
+
+#### Scenario: Chrome auto-hides while reading
+
+- **WHEN** playback is underway on a PDF
+- **THEN** the control chrome hides after a short delay to give the page the full
+  screen, and tapping the page reveals the controls again

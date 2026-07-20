@@ -1,0 +1,6 @@
+# Deps needed to run the unit tests (no GPU / model libraries required).
+grpcio>=1.68
+grpcio-tools>=1.68
+numpy>=1.26
+soundfile>=0.12
+pytest>=8.0

@@ -1,68 +1,70 @@
 ## ADDED Requirements
 
-### Requirement: Kokoro ONNX model synthesis
+### Requirement: Kokoro speech synthesis
 
-The TTS worker SHALL load the Kokoro ONNX model and voice pack once at startup
-and SHALL synthesize a provided normalized text chunk into mono WAV PCM
-float32 audio at the model's native sample rate (24000 Hz), exposing the result
-over a gRPC service.
+The TTS worker SHALL load the Kokoro model once at startup (the PyTorch
+`kokoro` package / `KPipeline`, on the GPU via torch-rocm when available, else
+CPU) and SHALL synthesize a provided normalized text chunk into mono **16-bit
+PCM** WAV at the model's native 24000 Hz over a unary gRPC call. 16-bit PCM,
+not IEEE-float: browsers' Web Audio `decodeAudioData` silently fails on
+float WAV, which left the reader with no audio.
 
 #### Scenario: Chunk synthesized to audio
 
 - **WHEN** the worker receives a `SynthesizeRequest` with non-empty `text` and a
   valid `voice_id`
-- **THEN** it returns audio whose duration is greater than zero and whose format
-  is PCM float32, mono, 24000 Hz
+- **THEN** it writes a valid mono 16-bit 24000 Hz WAV and reports a duration
+  greater than zero
 
 #### Scenario: Unknown voice rejected
 
-- **WHEN** a `SynthesizeRequest` specifies a `voice_id` not present in the loaded
-  voice pack
+- **WHEN** a `SynthesizeRequest` specifies a `voice_id` the backend doesn't know
 - **THEN** the worker returns a gRPC `INVALID_ARGUMENT` status naming the unknown
   voice and does not synthesize
 
-### Requirement: Phoneme and word durations returned
+### Requirement: Audio delivered by shared-volume path
 
-The TTS worker SHALL return, alongside audio, the per-token timing it used so the
-orchestrator has a synthesis-time prior, including phoneme durations and the
-total audio duration in seconds.
+The TTS worker SHALL NOT stream audio bytes over gRPC. It SHALL write the WAV to
+the shared volume at the request's `out_path` (relative to the data root,
+creating parent directories) and return that path plus `duration_seconds`
+matching the produced audio length. Word timing comes from forced alignment;
+phoneme timings MAY be returned but are not relied upon.
 
-#### Scenario: Durations accompany audio
+#### Scenario: Response carries the path, not bytes
 
 - **WHEN** synthesis completes
-- **THEN** the response includes `duration_seconds` equal (within 10 ms) to the
-  produced audio length and a non-empty list of phoneme durations
+- **THEN** the response's `audio_path` equals the requested `out_path`, the WAV
+  exists on the shared volume, and `duration_seconds` matches its length (within
+  10 ms)
 
-### Requirement: Execution provider selection and fallback
+### Requirement: Device selection and warmup
 
-The TTS worker SHALL select the ONNX Runtime execution provider in priority
-order ROCm → CUDA → CPU, SHALL log the chosen provider at startup, and SHALL
-fall back to the next provider if session creation on a higher-priority provider
-fails.
+The TTS worker SHALL run on the GPU when PyTorch reports one (torch-rocm
+presents the AMD GPU as `cuda`) and SHALL fall back to CPU otherwise, logging
+the selected device and reporting it in health detail. It SHALL warm up the
+synthesis pipeline before reporting healthy, so the first request doesn't pay
+one-time kernel compilation.
 
-#### Scenario: ROCm preferred when available
+#### Scenario: CPU fallback still serves
 
-- **WHEN** the worker starts with a working ROCm execution provider
-- **THEN** the InferenceSession is created with `ROCMExecutionProvider` and the
-  health detail reports the active provider and GPU device
+- **WHEN** no usable GPU is visible to PyTorch
+- **THEN** the worker starts on CPU, reports the device in health detail, and
+  serves synthesis requests
 
-#### Scenario: Fallback to CPU when GPU unavailable
+### Requirement: Phonemizer-safe text sanitation
 
-- **WHEN** neither ROCm nor CUDA providers can create a session
-- **THEN** the worker creates a CPU session, reports degraded mode in health
-  detail, and still serves synthesis requests
+The TTS worker SHALL sanitize chunk text before synthesis — smart quotes,
+dashes, and ellipses normalized to plain forms with correct prosody, true
+non-speech symbols (bullets, section marks) dropped, exotic spaces and
+non-printables collapsed — so odd typography can't break phonemization or
+mangle contractions, and SHALL trim Kokoro's leading/trailing dead air from
+each synthesized piece so chunks don't stack silence at every boundary.
 
-### Requirement: Streaming synthesis output
+#### Scenario: Smart punctuation reads correctly
 
-The TTS worker SHALL stream audio back in chunks via server-streaming gRPC, with
-the first message carrying the audio format and subsequent messages carrying
-audio bytes, marking the final message with `is_final = true`.
-
-#### Scenario: First message carries format
-
-- **WHEN** a synthesis stream begins
-- **THEN** the first `SynthesizeResponse` populates `format` (encoding, sample
-  rate, channels) and the last message has `is_final = true`
+- **WHEN** the text contains smart apostrophes ("don't") or em-dash-glued words
+- **THEN** contractions are pronounced correctly and the dash reads as a short
+  pause rather than a mispronounced glyph
 
 ### Requirement: GPU memory management and concurrency
 
@@ -73,24 +75,33 @@ alignment worker, and SHALL queue additional requests rather than failing.
 #### Scenario: Concurrent requests are serialized
 
 - **WHEN** more synthesis requests arrive than the concurrency limit
-- **THEN** excess requests wait in a bounded queue and are served in order
-  without out-of-memory failures
+- **THEN** excess requests wait and are served in order without out-of-memory
+  failures
 
-### Requirement: Synthesis error handling and retry
+### Requirement: Synthesis error handling and degradation
 
-The TTS worker SHALL classify failures as retryable (transient GPU/runtime
-errors) or non-retryable (invalid input), returning appropriate gRPC status
-codes, and the orchestrator SHALL retry retryable failures up to a configurable
-limit with backoff.
-
-#### Scenario: Transient GPU error is retryable
-
-- **WHEN** synthesis fails with a transient runtime error
-- **THEN** the worker returns `UNAVAILABLE` and the orchestrator retries the
-  chunk up to the configured maximum before marking it failed
+The TTS worker SHALL classify failures with gRPC status codes — invalid input
+(empty text, unknown voice) as `INVALID_ARGUMENT`, transient runtime errors as
+`UNAVAILABLE` — and one un-synthesizable sentence SHALL NOT fail its chunk or
+document: the worker SHALL retry that sentence with progressively safer text
+renderings and, if all fail, substitute a short silence proportional to its
+word count. The API SHALL bound every worker call with a deadline and surface a
+friendly, actionable error when a worker hangs or is unreachable (e.g. a GPU
+wedged after suspend/resume).
 
 #### Scenario: Empty text is non-retryable
 
 - **WHEN** a `SynthesizeRequest` has empty `text`
-- **THEN** the worker returns `INVALID_ARGUMENT` and the orchestrator does not
-  retry
+- **THEN** the worker returns `INVALID_ARGUMENT` and the pipeline does not retry
+
+#### Scenario: A stubborn sentence degrades to silence
+
+- **WHEN** one sentence fails phonemization in every fallback rendering
+- **THEN** the chunk still synthesizes, with that sentence replaced by a short
+  proportional silence
+
+#### Scenario: A wedged worker surfaces an error
+
+- **WHEN** a worker doesn't respond within its deadline
+- **THEN** the session surfaces an error telling the user to restart the workers,
+  instead of hanging at 0% forever
