@@ -203,25 +203,37 @@ export function PdfReader({
     };
   }, []);
 
-  // Keep the active word in view, unless the user scrolled recently. Also depend
-  // on `overlays`: when playback turns the page, the active word's box for the NEW
-  // page doesn't exist yet on the render where activeIndex changes (the canvas
-  // re-renders async, then overlays rebuild) — so keying on activeIndex alone left
-  // the highlight off-screen until the next word.
-  //   - When the active word CHANGES, re-center it (smooth, continuous following).
+  // Keep the active word in view. Also depend on `overlays`: when playback turns
+  // the page, the active word's box for the NEW page doesn't exist yet on the
+  // render where activeIndex changes (the canvas re-renders async, then overlays
+  // rebuild) — so keying on activeIndex alone left the highlight off-screen until
+  // the next word.
+  //   - When the active word CHANGES (advancing / seek), always re-center it —
+  //     smooth, continuous following that snaps back to the spoken word even if
+  //     the user scrolled away (the manual-scroll grace doesn't apply here).
   //   - When only `overlays` rebuilt (a page-turn settling, or a streamed chunk),
-  //     scroll only if the active word is actually off-screen. That brings the
-  //     highlight onto a freshly-turned page, without a chunk arriving while paused
-  //     yanking the page away from where the user is reading.
+  //     scroll only if the active word is off-screen AND no recent manual scroll,
+  //     so a chunk arriving while paused doesn't yank the page from where the
+  //     user is reading.
   useEffect(() => {
-    if (Date.now() - lastManualScroll.current < SCROLL_GRACE_MS) return;
     const el = activeBoxRef.current;
     if (!el) return;
     const activeChanged = lastScrolledIndex.current !== activeIndex;
     lastScrolledIndex.current = activeIndex;
+    // While the highlight is ADVANCING (playback, or a seek/tap), always snap the
+    // user back to the spoken word — following the voice wins over a recent manual
+    // scroll, so you can't drift away from where reading is happening. The grace
+    // period intentionally does NOT gate this case; it only governs "same word,
+    // overlays rebuilt" below (a paused reader skimming ahead, or a streamed chunk
+    // redrawing the boxes), where we nudge solely if the word went off-screen.
+    if (activeChanged) {
+      el.scrollIntoView({ block: "center", behavior: "smooth" });
+      return;
+    }
+    if (Date.now() - lastManualScroll.current < SCROLL_GRACE_MS) return;
     const r = el.getBoundingClientRect();
     const offscreen = r.top < 0 || r.bottom > window.innerHeight;
-    if (activeChanged || offscreen) el.scrollIntoView({ block: "center", behavior: "smooth" });
+    if (offscreen) el.scrollIntoView({ block: "center", behavior: "smooth" });
   }, [activeIndex, overlays]);
 
   // A tap on the page: seek to the nearest word if the tap is on or near one

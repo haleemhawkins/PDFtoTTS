@@ -12,7 +12,7 @@ pdfjsLib.GlobalWorkerOptions.workerSrc = workerUrl;
 // each page as a JBIG2 image with an invisible OCR text layer; without the wasm
 // decoder those pages render BLANK (text still extracts, so the highlight floats
 // on an empty page). cMaps/standard fonts cover CID-keyed and non-embedded fonts.
-const PDFJS_ASSET_OPTS = {
+export const PDFJS_ASSET_OPTS = {
   cMapUrl: "/pdfjs/cmaps/",
   cMapPacked: true,
   standardFontDataUrl: "/pdfjs/standard_fonts/",

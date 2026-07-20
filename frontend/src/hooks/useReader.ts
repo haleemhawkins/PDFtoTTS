@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import * as api from "../api/client";
 import { ChunkQueue } from "../audio/chunkQueue";
-import { createPlaybackEngine, type PlaybackEngine } from "../audio/playbackEngine";
+import {
+  createPlaybackEngine, usesNativeMediaTransport, type PlaybackEngine,
+} from "../audio/playbackEngine";
 import {
   clearMediaSession, setMediaHandlers, setMediaPlaybackState, setMediaPositionState,
 } from "../audio/mediaSession";
@@ -144,7 +146,19 @@ export function useReader(): ReaderController {
       setReady(false); // audio at the current position isn't buffered yet
       setState((s) => (s === "playing" ? "processing" : s));
     };
-    player.current.onResumed = () => setState((s) => (wasPlaying.current ? "playing" : s));
+    player.current.onResumed = () => {
+      if (player.current?.continuesInBackground) {
+        // Native (lock-screen) resume of the media element: the OS restarted
+        // playback, so restore the playing state the preceding onInterrupted
+        // (lock-screen pause) cleared, and re-arm the highlight loop.
+        wasPlaying.current = true;
+        setMediaPlaybackState("playing");
+        if (raf.current === null) raf.current = requestAnimationFrame(tick);
+        setState("playing");
+      } else {
+        setState((s) => (wasPlaying.current ? "playing" : s));
+      }
+    };
     player.current.onReady = () => setReady(true);
     // OS interruption (backgrounding the PWA, an incoming call) already captured
     // the position in a clean pause; reflect paused in the UI and do NOT auto-resume
@@ -173,7 +187,7 @@ export function useReader(): ReaderController {
       onReconnected: () => setState(wasPlaying.current ? "playing" : "processing"),
     });
     await connection.current.start();
-  }, [onChunk]);
+  }, [onChunk, tick]);
 
   const start = useCallback(
     async (file: File, voice: string, speed: number, startPage = 1, startWordIndex?: number) => {
@@ -448,9 +462,14 @@ export function useReader(): ReaderController {
   // Wire lock-screen / Control Center transport controls to the reader. Handlers
   // are stable useCallbacks, so this registers once. Next/Prev map to page turns.
   useEffect(() => {
+    // On iOS, leave play/pause to native media-element control so a lock-screen
+    // resume restarts the <audio> element itself (audible in the background); a
+    // JS play() there advances time but stays silent until foreground. Elsewhere
+    // (Web Audio engine, no background element) we must drive them ourselves.
+    const native = usesNativeMediaTransport();
     setMediaHandlers({
-      play,
-      pause,
+      play: native ? undefined : play,
+      pause: native ? undefined : pause,
       seekTo: (ms) => seekToMs(ms),
       seekBy: (delta) => seekToMs(Math.max(0, getPositionMs() + delta)),
       nextTrack: () => {

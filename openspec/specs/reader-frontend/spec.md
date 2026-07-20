@@ -1,4 +1,10 @@
-## ADDED Requirements
+# reader-frontend Specification
+
+## Purpose
+
+The React reader: render the document, play the streamed narration, and keep the spoken word highlighted and in view — across PDF and EPUB, desktop and mobile.
+
+## Requirements
 
 ### Requirement: Document rendering with word overlay
 
@@ -21,10 +27,15 @@ PDF.js text-layer geometry for PDFs and injected word `<span>`s for EPUBs.
 
 ### Requirement: Streamed chunk reception and audio queue
 
-The frontend SHALL connect to the SignalR reader hub, receive `ChunkReady`
-events, enqueue each chunk's audio in `chunkIndex` order, and play them
-gaplessly via WaveSurfer.js / Web Audio so playback can begin before the whole
-document is processed.
+The frontend SHALL connect to the SignalR reader hub and receive `ChunkReady`
+events to build the word-timing timeline in `chunkIndex` order. Audio playback
+SHALL be performed by a pluggable engine: a **media-element engine** (an
+`<audio>` element fed by the per-session stitched stream) is used where
+background/locked playback is required, and the existing **Web Audio queue
+engine** remains as a fallback. Either engine SHALL play audio gaplessly in
+document order and SHALL allow playback to begin before the whole document is
+processed. Receiving chunk metadata to extend the timeline SHALL be independent
+of the audio decode path.
 
 #### Scenario: Playback starts on first chunk
 
@@ -34,33 +45,34 @@ document is processed.
 #### Scenario: Out-of-order arrival is reordered
 
 - **WHEN** chunk 2 arrives before chunk 1
-- **THEN** the queue holds chunk 2 and plays chunk 1 first, preserving document
-  order
+- **THEN** the timeline holds chunk 2 and the stream/queue plays chunk 1 first,
+  preserving document order
 
 #### Scenario: Underrun pauses rather than skips
 
 - **WHEN** the next chunk has not yet arrived at the end of the current chunk
-- **THEN** playback pauses at the boundary and resumes automatically when the
-  next chunk arrives, without skipping words
+- **THEN** playback waits at the boundary and resumes automatically when the next
+  chunk arrives, without skipping words
 
 ### Requirement: Real-time word sync engine
 
 The frontend SHALL run a `requestAnimationFrame` loop that, on each frame, maps
 the current global playback time to the active word via binary search over the
-ordered word-timing array, and SHALL highlight exactly one active word at a
-time (or the merged source-word set for multi-token words).
+ordered word-timing array, and SHALL highlight exactly one active word at a time
+(or the merged source-word set for multi-token words). The current playback time
+SHALL be read from the active playback engine — the media element's `currentTime`
+for the media-element engine, or the Web Audio clock for the queue engine.
 
 #### Scenario: Active word resolved by binary search
 
 - **WHEN** playback time advances to a value within word N's `[startMs, endMs]`
 - **THEN** the engine selects word N in O(log n) and applies the active highlight
-  to it, clearing the previous word's highlight
 
-#### Scenario: Seek updates highlight immediately
+#### Scenario: Highlight tracks the media element
 
-- **WHEN** the user clicks a word or seeks the audio
-- **THEN** playback time jumps to that word's `startMs` and the highlight updates
-  on the next frame without scanning linearly from the start
+- **WHEN** the media-element engine is active and playing
+- **THEN** the active word is computed from the element's `currentTime` and stays
+  in sync, including while the screen is locked and after returning to foreground
 
 ### Requirement: Auto-scroll to active word
 
@@ -145,17 +157,27 @@ indicate the loading-vs-ready transition so a single tap starts read-out.
 
 ### Requirement: Resume position across backgrounding and reload
 
-The reader SHALL preserve playback position when interrupted. When the app is
-backgrounded or its audio context is interrupted, it SHALL pause cleanly at the
-current position and remain paused on return (no auto-resume). It SHALL persist
-the exact word being read so that a full reload resumes at that word (re-synthesizing
-from there), not merely the page.
+The reader SHALL preserve playback position when interrupted. When the
+media-element engine is active, backgrounding or locking the screen SHALL NOT
+pause playback (see the background-audio capability). When a genuine OS
+interruption occurs (incoming call, audio session lost), or when the Web Audio
+fallback engine is active, the reader SHALL pause cleanly at the current position
+and remain paused on return (no auto-resume). It SHALL persist the exact word
+being read so that a full reload resumes at that word (re-synthesizing from
+there), not merely the page.
 
-#### Scenario: Return from background resumes from the same spot
+#### Scenario: Background no longer force-pauses with the media engine
 
-- **WHEN** the app is backgrounded mid-playback and later reopened
-- **THEN** it is paused at the word it left off on, and tapping Play resumes from
-  exactly there without having auto-played on return
+- **WHEN** the app is backgrounded or the screen is locked mid-playback while the
+  media-element engine is active
+- **THEN** playback continues, and on return the reader is still playing at the
+  current position
+
+#### Scenario: Genuine interruption resumes from the same spot
+
+- **WHEN** an incoming call interrupts playback
+- **THEN** the reader is paused at the word it left off on, and tapping Play
+  resumes from exactly there without having auto-played
 
 #### Scenario: Full reload resumes at the exact word
 
@@ -211,3 +233,100 @@ on a tap, so document content occupies the screen while reading.
 - **WHEN** playback is underway on a PDF
 - **THEN** the control chrome hides after a short delay to give the page the full
   screen, and tapping the page reveals the controls again
+
+### Requirement: Library home view
+
+The frontend SHALL present a library as the app's home: a list of all documents
+from `GET /api/documents`, each showing its name, type, and status — plus a
+cover thumbnail (PDF page 1 / the EPUB's declared cover, rendered lazily and
+cached locally; a neutral fallback when unavailable) and a "last read" hint when
+a resume position exists — with an upload affordance that accepts both file
+picking and drag-and-drop. The library replaces the single-document upload
+screen as the default landing view.
+
+#### Scenario: Library lists documents
+
+- **WHEN** the app loads and documents exist
+- **THEN** each document is shown with its name and type, and selecting one opens
+  it in the reader
+
+#### Scenario: Empty library invites upload
+
+- **WHEN** the app loads with no documents
+- **THEN** an empty state with an upload control is shown
+
+#### Scenario: Upload adds to the library
+
+- **WHEN** the user uploads a new PDF/EPUB from the library
+- **THEN** the document appears in the library and (once `Ready`) can be opened
+
+### Requirement: Open a document by id
+
+The frontend SHALL open a document from the library by fetching its original bytes
+from `GET /api/documents/{id}/original` for rendering and starting a TTS session,
+without requiring the user to re-select the file.
+
+#### Scenario: Open from library
+
+- **WHEN** the user selects a `Ready` document in the library
+- **THEN** the reader renders the document from the server-provided original and
+  begins a session at the saved position (or the start)
+
+#### Scenario: Home returns to the library
+
+- **WHEN** the user taps Home in the reader
+- **THEN** the reader closes and the library is shown, with the document still
+  present in the library
+
+### Requirement: Rename and delete from the library
+
+The frontend SHALL let the user rename and delete documents from the library,
+calling `PATCH` and `DELETE /api/documents/{id}` and reflecting the result.
+
+#### Scenario: Rename a document
+
+- **WHEN** the user renames a document and confirms
+- **THEN** the new name is sent via `PATCH` and shown in the library
+
+#### Scenario: Delete a document
+
+- **WHEN** the user deletes a document and confirms
+- **THEN** the document is removed via `DELETE` and disappears from the library
+
+### Requirement: Cross-device resume
+
+The frontend SHALL push the current reading position (page, word, voice, speed,
+timestamped) to the backend on the discrete leave-events (pause, page turn,
+voice/speed change, returning home, tab hidden, page unload) and periodically
+while playing, and on open SHALL resume from whichever of the locally cached and
+server-stored positions is newer. Position saves SHALL be best-effort and never
+disrupt reading.
+
+#### Scenario: Resume on another device
+
+- **WHEN** the user reads on one device and later opens the same document on
+  another
+- **THEN** the reader lands paused at the position the first device last
+  reported, with its voice and speed
+
+#### Scenario: Stale local cache loses
+
+- **WHEN** the server's stored position is newer than this device's local cache
+- **THEN** the server position is used and seeded into the local cache
+
+### Requirement: In-reader voice switcher
+
+The frontend SHALL provide a voice picker in the reader so the user can change the
+narration voice mid-document. Changing the voice SHALL re-synthesize from the
+current word at the new voice and remember the choice for that document.
+
+#### Scenario: Change voice while reading
+
+- **WHEN** the user picks a different voice from the reader menu
+- **THEN** synthesis restarts from the current word using the new voice and
+  playback continues from that word
+
+#### Scenario: Voice choice is remembered
+
+- **WHEN** the user reopens a document whose voice was changed
+- **THEN** the previously chosen voice is used for the new session

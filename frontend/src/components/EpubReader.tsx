@@ -31,8 +31,12 @@ interface Props {
   file: File;
   timeline: Timeline;
   activeIndex: number;
-  /** Tap a word → seek there and START reading (PDF parity with tap-to-read). */
-  onSeekToWord: (timelineIndex: number) => void;
+  /** Tap a word → start reading there (PDF parity with tap-to-read). Takes the
+   *  SOURCE word index: if that word is already synthesized the reader seeks to
+   *  it; otherwise it cancels and re-synthesizes from there — so tapping a word
+   *  outside the current session's timeline (before its start word, or ahead of
+   *  synthesis) jumps there instead of being silently ignored. */
+  onJumpToWord: (sourceWordIndex: number) => void;
   /** Navigate to a section's first word (Prev/Next/chapter/swipe): position +
    *  preload but stay PAUSED, exactly like the PDF pager. Takes a SOURCE word
    *  index (the section's global base), not a timeline index. */
@@ -50,10 +54,6 @@ interface Section {
   base: number; // global index of this section's first word
 }
 
-const SCROLL_GRACE_MS = 2500;
-// epub.js draws a highlight annotation as an SVG <rect>; style its fill here.
-const HIGHLIGHT_STYLE = { fill: "#ffd54a", "fill-opacity": "0.4" };
-
 /** Path part of an href (drop any #anchor) for tolerant TOC ↔ section matching. */
 const hrefPath = (h: string) => h.split("#")[0];
 
@@ -70,13 +70,13 @@ function flattenToc(items: NavItem[], depth: number, out: TocItem[]) {
  * shared chrome (play/seek/menu) plus a bottom pager and chapters drawer drive it
  * (design §6.3/§6.7). Specifically it:
  * - injects addressable word spans whose indices match the server (see wordSpans),
- * - highlights the active word via epub.js's annotations API (a CFI range built
- *   from the active span), advancing the section as playback crosses into it,
+ * - highlights the active word by toggling .tts-active on its span (styled via the
+ *   rendition theme), advancing the section as playback crosses into it,
  * - seeks playback to a section's first word when the user navigates there,
  * - toggles the chrome on a background tap and seeks on a word tap (PDF parity).
  */
 export const EpubReader = forwardRef<EpubReaderHandle, Props>(function EpubReader(
-  { file, timeline, activeIndex, onSeekToWord, onNavigate, onToggleChrome, onToc, onChapter },
+  { file, timeline, activeIndex, onJumpToWord, onNavigate, onToggleChrome, onToc, onChapter },
   ref,
 ) {
   const [buffer, setBuffer] = useState<ArrayBuffer | null>(null);
@@ -92,13 +92,12 @@ export const EpubReader = forwardRef<EpubReaderHandle, Props>(function EpubReade
   // user navigation — it must NOT reposition/seek playback (that auto-started the
   // voice on load). Genuine navigations flip this true.
   const navInitialized = useRef(false);
-  const lastManualScroll = useRef(0);
-  // CFI of the currently-highlighted word, so we can remove it before the next.
-  const lastAnnotationCfi = useRef<string | null>(null);
+  // The currently-highlighted word span, so we can clear its class before the next.
+  const lastHighlightedSpan = useRef<HTMLElement | null>(null);
   // Latest timeline / callbacks for use inside epub.js event handlers (which
   // fire asynchronously, so updating these in effects is timely enough).
   const timelineRef = useRef(timeline);
-  const onSeekRef = useRef(onSeekToWord);
+  const onJumpRef = useRef(onJumpToWord);
   const onNavigateRef = useRef(onNavigate);
   const onToggleRef = useRef(onToggleChrome);
   const onChapterRef = useRef(onChapter);
@@ -106,8 +105,8 @@ export const EpubReader = forwardRef<EpubReaderHandle, Props>(function EpubReade
     timelineRef.current = timeline;
   }, [timeline]);
   useEffect(() => {
-    onSeekRef.current = onSeekToWord;
-  }, [onSeekToWord]);
+    onJumpRef.current = onJumpToWord;
+  }, [onJumpToWord]);
   useEffect(() => {
     onNavigateRef.current = onNavigate;
   }, [onNavigate]);
@@ -162,8 +161,6 @@ export const EpubReader = forwardRef<EpubReaderHandle, Props>(function EpubReade
     const container = scrollContainer();
     const rendition = renditionRef.current;
     if (!container || !rendition) return;
-    // Don't let highlight auto-scroll fight the page turn for a moment.
-    lastManualScroll.current = Date.now();
     const max = container.scrollHeight - container.clientHeight;
     const step = Math.max(120, container.clientHeight * 0.9);
     const target = Math.min(max, Math.max(0, container.scrollTop + dir * step));
@@ -282,6 +279,16 @@ export const EpubReader = forwardRef<EpubReaderHandle, Props>(function EpubReade
       "p, li, dd, dt, blockquote, td, th, figcaption, h1, h2, h3, h4, h5, h6, span, div, em, strong, i, b, small, sub, sup":
         { color: "#1a1a1a !important" },
       a: { color: "#1a4fc0 !important" },
+      // The active word is highlighted by toggling .tts-active on its injected
+      // span (see highlightWord) rather than via epub.js's CFI annotations API,
+      // whose marks-pane overlay only painted the word's first character. A span
+      // background covers the whole word and wraps cleanly across a line break.
+      ".epub-word.tts-active": {
+        background: "#ffd54a !important",
+        "border-radius": "2px",
+        "box-decoration-break": "clone",
+        "-webkit-box-decoration-break": "clone",
+      },
     });
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -294,23 +301,21 @@ export const EpubReader = forwardRef<EpubReaderHandle, Props>(function EpubReade
       const section = sectionsRef.current[contents.sectionIndex];
       injectWordSpans(contents.document.body, section?.base ?? 0);
 
-      // PDF parity: tap a word → seek there; tap the background → toggle chrome.
+      // PDF parity: tap a word → read from there; tap the background → toggle
+      // chrome. The SOURCE index goes up as-is — jumpToWord seeks when the word
+      // is already synthesized and re-synthesizes from it when it isn't, so a
+      // tap outside the current session's timeline (before its start word, or
+      // ahead of synthesis) jumps there instead of being silently dropped
+      // (which left the voice reading on from wherever it already was).
       contents.document.body.addEventListener("click", (e: Event) => {
         const span = (e.target as HTMLElement).closest?.(".epub-word");
         if (span) {
           const wi = Number(span.getAttribute("data-wi"));
-          const ti = timelineRef.current.words.findIndex((w) => w.wordIndex === wi);
-          if (ti >= 0) onSeekRef.current(ti);
+          if (Number.isInteger(wi)) onJumpRef.current(wi);
         } else {
           onToggleRef.current();
         }
       });
-
-      const onManual = () => {
-        lastManualScroll.current = Date.now();
-      };
-      contents.document.addEventListener("wheel", onManual, { passive: true });
-      contents.document.addEventListener("touchmove", onManual, { passive: true });
     });
 
     // A section change the user caused (swipe / chapter pick / scroll) seeks
@@ -348,8 +353,12 @@ export const EpubReader = forwardRef<EpubReaderHandle, Props>(function EpubReade
     onToc?.(flat);
   }, [onToc]);
 
-  // Highlight the active word via the annotations API, scrolling it into view
-  // unless the user just scrolled.
+  // Highlight the active word by toggling .tts-active on its injected span (styled
+  // by the theme above), scrolling it into view whenever the word changes.
+  // We style the span directly rather than via epub.js's annotations API: its CFI
+  // marks-pane overlay resolved a single-word range to just the first character,
+  // so only the word's first letter was highlighted. A span background is exact and
+  // wraps across line breaks for free.
   const highlightWord = useCallback((wordIndex: number) => {
     const rendition = renditionRef.current;
     if (!rendition) return;
@@ -357,47 +366,32 @@ export const EpubReader = forwardRef<EpubReaderHandle, Props>(function EpubReade
     const contents = (rendition as any).getContents();
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const list: any[] = Array.isArray(contents) ? contents : [contents];
+    let target: HTMLElement | null = null;
     for (const c of list) {
       const doc: Document = c.document;
-      const span = doc.querySelector(`.epub-word[data-wi="${wordIndex}"]`);
-      if (!span) continue;
-
-      const range = doc.createRange();
-      range.selectNodeContents(span);
-      const cfi: string = c.cfiFromRange(range);
-
-      if (lastAnnotationCfi.current === cfi) return; // already highlighted
-      if (lastAnnotationCfi.current) {
-        try {
-          rendition.annotations.remove(lastAnnotationCfi.current, "highlight");
-        } catch {
-          /* already gone */
-        }
+      const found = doc.querySelector<HTMLElement>(`.epub-word[data-wi="${wordIndex}"]`);
+      if (found) {
+        target = found;
+        break;
       }
-      // epub.js renders the highlight as a <g class="tts-active"><rect> overlay in
-      // the parent doc (marks-pane), not inside the section iframe. Guard it: when
-      // a section is mid-relocation the CFI can momentarily resolve to a detached
-      // range and epub.js throws on getClientRects — a transient highlight miss
-      // must never break navigation or the rAF-driven highlight loop.
-      try {
-        rendition.annotations.add("highlight", cfi, {}, undefined, "tts-active", HIGHLIGHT_STYLE);
-        lastAnnotationCfi.current = cfi;
-      } catch {
-        lastAnnotationCfi.current = null;
-        return;
-      }
-
-      if (Date.now() - lastManualScroll.current >= SCROLL_GRACE_MS) {
-        span.scrollIntoView({ block: "center", behavior: "smooth" });
-      }
-      return;
     }
+    if (!target) return;
+
+    if (lastHighlightedSpan.current === target) return; // already highlighted
+    lastHighlightedSpan.current?.classList.remove("tts-active");
+    target.classList.add("tts-active");
+    lastHighlightedSpan.current = target;
+
+    // The dedupe above means we only reach here on a NEW word, so during playback
+    // this is the highlight advancing — always snap the reader back to the spoken
+    // word, following the voice even if the user scrolled away.
+    target.scrollIntoView({ block: "center", behavior: "smooth" });
   }, []);
 
   // Drive the view from the active word: advance the section if needed, then
-  // highlight + (grace-permitting) scroll it into view. When navigation has set
-  // activeIndex to -1 (jumped to a not-yet-synthesized section) there's no active
-  // word, so this no-ops and never yanks the view back.
+  // highlight and scroll it into view. When navigation has set activeIndex to -1
+  // (jumped to a not-yet-synthesized section) there's no active word, so this
+  // no-ops and never yanks the view back.
   useEffect(() => {
     const word = timeline.words[activeIndex];
     const rendition = renditionRef.current;

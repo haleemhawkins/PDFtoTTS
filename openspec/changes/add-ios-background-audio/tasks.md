@@ -33,8 +33,8 @@
 
 ## 5. Media Session controls
 
-- [x] 5.1 Add `mediaSession` module: `setMediaMetadata` (title from filename) and `setMediaPositionState` from the timeline each tick. (Artwork left optional — OQ3.)
-- [x] 5.2 Register action handlers: play/pause → reader; seekbackward/forward + seekto → `seekToMs`; previous/next → `jumpToPage`.
+- [x] 5.1 Add `mediaSession` module: `setMediaMetadata` (title from filename, artwork from the library's cached cover when available — OQ3 resolved) and `setMediaPositionState` from the timeline each tick.
+- [x] 5.2 Register action handlers: seekbackward/forward + seekto → `seekToMs`; previous/next → `jumpToPage`. Play/pause handlers are registered only on the Web Audio path — on iOS they're left to the native media-element transport (a lock-screen JS `play()` is silent in the background); the `playing`/`pause` element events sync app state instead.
 - [x] 5.3 Update position each tick and playback state on play/pause; clear handlers/metadata on reset and unmount.
 
 ## 6. Verification

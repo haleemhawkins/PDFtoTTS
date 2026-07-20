@@ -72,6 +72,16 @@ file-restore path. `persist.ts` is reduced to a per-document position map
 (`{ [id]: { page, word, voice, speed } }`) plus a `lastOpenedId`, so a reload
 restores the last document by id and each document remembers its place.
 
+### Server-side reading position for cross-device resume (shipped follow-up)
+Each `Document` carries an optional `ReadingPosition` (page, word, voice, speed,
+`updatedAtMs`) persisted in the catalogue. `PUT /api/documents/{id}/position`
+saves it with **last-writer-wins by the client's timestamp** (a stale tab can't
+clobber a newer device); wildly-future timestamps are clamped to server-now + 1h
+so a skewed clock can't freeze the resume point. The client pushes its locally
+cached position on the discrete leave-events (pause, page turn, voice/speed
+change, Home, tab hidden, unload) plus every 15s while playing, and on open picks
+whichever of local-cache vs server position is newer.
+
 ### Voice switch mirrors speed change
 `useReader` already re-synthesizes from the current source word in `changeSpeed`
 via `restartAt(sourceWord, speed)`. Add `changeVoice(voice)` that sets `voiceRef`
@@ -108,5 +118,9 @@ to the per-document persist entry.
 
 ## Open Questions
 
-- None blocking. Cover-thumbnail rendering in the library is deferred (out of
-  scope); cards show name + type + status only.
+- None blocking. Cover thumbnails were deferred from the initial change and later
+  shipped: `LibraryCover` renders page 1 of a PDF (range-fetched, not the whole
+  file) or the EPUB's declared cover, lazily on card visibility, cached as a small
+  WebP data URL in localStorage (evicted on document delete) and reused as the
+  lock-screen artwork. The upload control also grew into a drag-and-drop dropzone,
+  and cards show a "last read" resume hint from the server position.

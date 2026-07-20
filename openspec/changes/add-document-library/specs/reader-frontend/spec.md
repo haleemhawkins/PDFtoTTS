@@ -3,9 +3,12 @@
 ### Requirement: Library home view
 
 The frontend SHALL present a library as the app's home: a list of all documents
-from `GET /api/documents`, each showing its name, type, and status, with an
-affordance to upload a new document. The library replaces the single-document
-upload screen as the default landing view.
+from `GET /api/documents`, each showing its name, type, and status — plus a
+cover thumbnail (PDF page 1 / the EPUB's declared cover, rendered lazily and
+cached locally; a neutral fallback when unavailable) and a "last read" hint when
+a resume position exists — with an upload affordance that accepts both file
+picking and drag-and-drop. The library replaces the single-document upload
+screen as the default landing view.
 
 #### Scenario: Library lists documents
 
@@ -55,6 +58,27 @@ calling `PATCH` and `DELETE /api/documents/{id}` and reflecting the result.
 
 - **WHEN** the user deletes a document and confirms
 - **THEN** the document is removed via `DELETE` and disappears from the library
+
+### Requirement: Cross-device resume
+
+The frontend SHALL push the current reading position (page, word, voice, speed,
+timestamped) to the backend on the discrete leave-events (pause, page turn,
+voice/speed change, returning home, tab hidden, page unload) and periodically
+while playing, and on open SHALL resume from whichever of the locally cached and
+server-stored positions is newer. Position saves SHALL be best-effort and never
+disrupt reading.
+
+#### Scenario: Resume on another device
+
+- **WHEN** the user reads on one device and later opens the same document on
+  another
+- **THEN** the reader lands paused at the position the first device last
+  reported, with its voice and speed
+
+#### Scenario: Stale local cache loses
+
+- **WHEN** the server's stored position is newer than this device's local cache
+- **THEN** the server position is used and seeded into the local cache
 
 ### Requirement: In-reader voice switcher
 

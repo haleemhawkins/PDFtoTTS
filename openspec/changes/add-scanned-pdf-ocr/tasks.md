@@ -6,7 +6,7 @@
 ## 2. Surya OCR worker
 
 - [x] 2.1 Scaffold `workers/surya-ocr/` mirroring the whisperx worker (`worker/__init__.py`, `errors.py`, `health.py`, `healthcheck.py`, `server.py`, `backend.py`, `tests/`).
-- [x] 2.2 Implement the backend: render pages with pypdfium2 at `OCR_RENDER_DPI` (default 200), run Surya detection+recognition, sort lines top-to-bottom, convert pixel boxes (top-left) to PDF points (bottom-left), and split lines into word boxes by character width.
+- [x] 2.2 Implement the backend: render pages with pypdfium2 at `OCR_RENDER_DPI` (default 300), run Surya detection+recognition, sort lines top-to-bottom, convert pixel boxes (top-left) to PDF points (bottom-left), and split lines into word boxes by character width.
 - [x] 2.3 Implement the gRPC servicer (`OcrServicer`) and `serve()` with model `load()` + `warmup()`; report health NOT_READY→SERVING.
 - [x] 2.4 Dockerfile on `rocm/pytorch` base: pin the preinstalled ROCm torch via a generated pip constraint, pin `numpy<2` and `transformers>=4.45,<4.52`, assert `torch.version.hip` and a `torch.numpy()` roundtrip at build time, compile protos, set env + HEALTHCHECK.
 - [x] 2.5 Unit-test the pure word-splitting / coordinate-flip logic (no torch needed).

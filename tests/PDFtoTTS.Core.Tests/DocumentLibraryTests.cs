@@ -209,6 +209,56 @@ public class DocumentLibraryTests
 
     private sealed record JsonElementWord(int Index, string Text);
 
+    private sealed record SessionDto(string Id, string Status);
+
+    [Fact]
+    public async Task New_session_supersedes_and_cleans_up_the_previous_one()
+    {
+        var dataDir = NewDataDir();
+        await using var factory = new ReaderAppFactory(dataDir);
+        var client = factory.CreateClient();
+        var doc = await UploadAndWaitReady(client, "supersede.pdf", "Voice change supersedes session.");
+
+        var first = await (await client.PostAsJsonAsync($"/api/documents/{doc.Id}/sessions",
+            new { voice = "af_heart", speed = 1.0f, language = "en" })).Content.ReadFromJsonAsync<SessionDto>();
+        // Wait for the first pipeline to finish so nothing is mid-write when superseded.
+        for (int i = 0; i < 100; i++)
+        {
+            var s = await client.GetFromJsonAsync<SessionDto>($"/api/sessions/{first!.Id}");
+            if (s!.Status is "Complete" or "Error") break;
+            await Task.Delay(50);
+        }
+        // Simulate the audio the real synthesizer would have written.
+        string firstAudioDir = Path.Combine(dataDir, "audio", first!.Id);
+        Directory.CreateDirectory(firstAudioDir);
+        await File.WriteAllBytesAsync(Path.Combine(firstAudioDir, "00000.wav"), [1, 2, 3]);
+
+        // A second session for the same document (a voice/speed change or a jump)
+        // must tear the first one down — store entry AND its audio on disk.
+        var second = await (await client.PostAsJsonAsync($"/api/documents/{doc.Id}/sessions",
+            new { voice = "am_adam", speed = 1.0f, language = "en" })).Content.ReadFromJsonAsync<SessionDto>();
+
+        Assert.Equal(HttpStatusCode.NotFound, (await client.GetAsync($"/api/sessions/{first.Id}")).StatusCode);
+        Assert.False(Directory.Exists(firstAudioDir));
+        Assert.Equal(HttpStatusCode.OK, (await client.GetAsync($"/api/sessions/{second!.Id}")).StatusCode);
+    }
+
+    [Fact]
+    public async Task Startup_purges_orphaned_session_audio()
+    {
+        var dataDir = NewDataDir();
+        // Audio left behind by a "previous process": sessions are in-memory only,
+        // so nothing can reference this directory after a restart.
+        string orphanDir = Path.Combine(dataDir, "audio", Guid.NewGuid().ToString());
+        Directory.CreateDirectory(orphanDir);
+        await File.WriteAllBytesAsync(Path.Combine(orphanDir, "00000.wav"), [1, 2, 3]);
+
+        await using var factory = new ReaderAppFactory(dataDir);
+        factory.CreateClient(); // boots the host
+
+        Assert.False(Directory.Exists(orphanDir));
+    }
+
     private sealed record PositionDto(int Page, int Word, string? Voice, float Speed, long UpdatedAtMs);
     private sealed record DocWithPosition(string Id, string Status, PositionDto? Position);
 

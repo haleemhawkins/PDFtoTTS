@@ -9,7 +9,16 @@
 > an AAC/MPEG-TS segment on demand, served via a growing EVENT `.m3u8` playlist
 > (`/api/sessions/{id}/hls/…`). The frontend `MediaElementPlayer` loads that
 > playlist. Everything else below (D1 two-engine selection, D4 sync via
-> `currentTime`, D5 relaxed background pause, D6 Media Session) shipped as designed.
+> `currentTime`, D5 relaxed background pause, D6 Media Session) shipped as designed,
+> with one D6 refinement found on-device: on iOS the **play/pause Media Session
+> handlers are NOT registered** (`usesNativeMediaTransport()`), leaving them to the
+> platform's native media-element transport. A JS `play()` from the lock screen
+> advances `currentTime` but plays SILENTLY until the app is foregrounded; letting
+> the OS resume the `<audio>` element itself keeps background audio audible. The
+> engine's `playing` event syncs app state on a native resume (restoring the
+> playing UI and re-arming the highlight loop), and the richer actions (seek, page
+> turns) stay wired through Media Session. Lock-screen artwork reuses the library's
+> cached cover thumbnail (OQ3 resolved).
 > Known follow-up: ~80 ms/chunk AAC priming drift between audio and the word
 > highlight on long sessions.
 

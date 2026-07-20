@@ -7,8 +7,10 @@
  */
 
 type Handlers = {
-  play: () => void;
-  pause: () => void;
+  // Omit play/pause to leave them to the platform's native media-element control
+  // (iOS: lets the OS resume the <audio> element so background audio stays audible).
+  play?: () => void;
+  pause?: () => void;
   seekTo: (ms: number) => void;
   seekBy: (deltaMs: number) => void;
   nextTrack: () => void;
@@ -25,7 +27,10 @@ export function setMediaMetadata(title: string, artworkUrl?: string): void {
   session.metadata = new MediaMetadata({
     title,
     artist: "PDFtoTTS",
-    artwork: artworkUrl ? [{ src: artworkUrl, sizes: "512x512", type: "image/png" }] : [],
+    // Cover art for the lock screen / Control Center. Usually the library's
+    // cached cover thumbnail (a data URL); sizes/type are omitted so the
+    // browser sniffs them from the image itself.
+    artwork: artworkUrl ? [{ src: artworkUrl }] : [],
   });
 }
 
@@ -39,8 +44,8 @@ export function setMediaHandlers(h: Handlers): void {
       /* unsupported action on this browser */
     }
   };
-  set("play", () => h.play());
-  set("pause", () => h.pause());
+  set("play", h.play ? () => h.play!() : null);
+  set("pause", h.pause ? () => h.pause!() : null);
   set("seekforward", (d) => h.seekBy((d.seekOffset ?? 10) * 1000));
   set("seekbackward", (d) => h.seekBy(-(d.seekOffset ?? 10) * 1000));
   set("seekto", (d) => {

@@ -1,7 +1,53 @@
 :root {
   --accent: #ffd54a;
-  --bg: #1e1e22;
-  --panel: #2a2a30;
+  --accent-ink: #1e1e22; /* readable text on an accent fill */
+  --accent-text: #ffd54a; /* accent used AS text — needs contrast on the bg */
+  --bg: #16171d;
+  --panel: #24252c;
+  --panel-2: #2e2f38; /* controls / hover / raised */
+  --btn-hover: #3a3b45;
+  --btn-hover-border: #4c4d58;
+  --border: #3a3b44;
+  --text: #e8e8ea;
+  --text-h: #f3f4f6;
+  --text-dim: #9a9aa4;
+  --track: #444; /* progress/scrub track behind a fill */
+  --spinner-ring: rgba(255, 255, 255, 0.3);
+  --danger-bg: #5a2330;
+  --danger-text: #ffd7d7;
+  --radius: 12px;
+  --shadow: 0 6px 24px rgba(0, 0, 0, 0.35);
+}
+
+/* Light theme: follows the OS setting. Only the app chrome adapts — the reader's
+   document surface (PDF canvas, EPUB page) stays "paper white" in both modes. */
+@media (prefers-color-scheme: light) {
+  :root {
+    --accent-text: #876a00; /* dark amber, readable on light surfaces */
+    --bg: #f4f4f6;
+    --panel: #ffffff;
+    --panel-2: #ececed;
+    --btn-hover: #e3e3e7;
+    --btn-hover-border: #c7c7cf;
+    --border: #dcdce1;
+    --text: #1d1d1f;
+    --text-h: #111317;
+    --text-dim: #6b6b73;
+    --track: #e2e2e6;
+    --spinner-ring: rgba(0, 0, 0, 0.18);
+    --danger-bg: #fdecea;
+    --danger-text: #8a1c2b;
+    --shadow: 0 6px 24px rgba(0, 0, 0, 0.12);
+  }
+
+  /* Darker chevron + subtler card-action buttons on light surfaces. */
+  select {
+    background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'><path d='M2.5 4.5l3.5 3.5 3.5-3.5' fill='none' stroke='%236b6b73' stroke-width='1.4' stroke-linecap='round' stroke-linejoin='round'/></svg>");
+  }
+
+  .library-card-actions .icon-btn {
+    background: rgba(0, 0, 0, 0.05);
+  }
 }
 
 .app {
@@ -15,14 +61,12 @@
   margin: 0 auto;
   padding: 1rem;
   box-sizing: border-box;
-  color: #eee;
+  color: var(--text);
 }
 
-/* The app surfaces are always dark; headings otherwise inherit index.css's
-   light-scheme color (near-black) and vanish on the dark panel in light mode. */
 .app h1,
 .app h2 {
-  color: #eee;
+  color: var(--text-h);
 }
 
 .upload-view {
@@ -54,29 +98,127 @@
 .library-view {
   display: flex;
   flex-direction: column;
-  gap: 1rem;
-  max-width: 760px;
-  margin: 2rem auto;
+  gap: 1.25rem;
+  max-width: 820px;
+  width: 100%;
+  margin: 2.5rem auto;
 }
 
-.library-upload {
+.library-head {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.library-sub {
+  color: var(--text-dim);
+  font-size: 0.95rem;
+  max-width: 60ch;
+}
+
+/* --- Upload panel + drag-and-drop dropzone --- */
+.upload-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 0.9rem;
+  background: var(--panel);
+  padding: 1.1rem;
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+}
+
+.dropzone {
+  display: flex;
+  align-items: center;
+  gap: 0.9rem;
+  padding: 1.1rem 1.2rem;
+  border: 1.5px dashed var(--border);
+  border-radius: var(--radius);
+  background: rgba(255, 255, 255, 0.015);
+  cursor: pointer;
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+
+.dropzone:hover,
+.dropzone.over {
+  border-color: var(--accent);
+  background: rgba(255, 213, 74, 0.06);
+}
+
+.dropzone.has-file {
+  border-style: solid;
+  border-color: var(--btn-hover-border);
+}
+
+/* The real <input type=file> fills the label so the whole zone is clickable,
+   but the native control itself (the ugly "Choose File" button) is hidden. */
+.dropzone-input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.dropzone-icon {
+  font-size: 1.5rem;
+  line-height: 1;
+  flex-shrink: 0;
+  opacity: 0.85;
+}
+
+.dropzone-text {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  min-width: 0;
+}
+
+.dropzone-text strong {
+  font-weight: 600;
+  word-break: break-word;
+}
+
+.dropzone-hint {
+  font-size: 0.82rem;
+  color: var(--text-dim);
+}
+
+.upload-controls {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: 0.6rem 0.9rem;
-  background: var(--panel);
-  padding: 1rem 1.1rem;
-  border-radius: 12px;
 }
 
 .lib-field {
   display: flex;
   align-items: center;
   gap: 0.4rem;
+  color: var(--text-dim);
+  font-size: 0.9rem;
+}
+
+.lib-field select {
+  color: var(--text);
+}
+
+/* Primary call-to-action (Add document). Pushed to the end of the row. */
+.btn-primary {
+  margin-left: auto;
+  background: var(--accent);
+  color: var(--accent-ink);
+  border-color: var(--accent);
+  font-weight: 600;
+}
+
+.btn-primary:hover:not(:disabled) {
+  background: #ffdf6b;
+  border-color: #ffdf6b;
 }
 
 .library-empty {
-  color: #aaa;
+  color: var(--text-dim);
   text-align: center;
   margin: 2rem 0;
 }
@@ -91,33 +233,100 @@
 }
 
 .library-card {
+  position: relative;
   display: flex;
   align-items: stretch;
   background: var(--panel);
-  border-radius: 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
   overflow: hidden;
+  transition: border-color 0.15s ease, transform 0.12s ease, box-shadow 0.15s ease;
+}
+
+.library-card:not(.disabled):hover {
+  border-color: var(--btn-hover-border);
+  transform: translateY(-2px);
+  box-shadow: var(--shadow);
 }
 
 .library-card.disabled {
-  opacity: 0.7;
+  opacity: 0.65;
 }
 
 .library-card-main {
   flex: 1;
   display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 0.35rem;
+  flex-direction: row;
+  align-items: center;
+  gap: 0.8rem;
   text-align: left;
   background: transparent;
   border: none;
-  padding: 0.9rem;
-  color: #eee;
+  border-radius: 0;
+  /* Right padding leaves room for the floating action cluster (top-right). */
+  padding: 0.85rem 3rem 0.85rem 0.85rem;
+  color: var(--text);
   cursor: pointer;
+}
+
+.library-card-text {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.35rem;
+  min-width: 0; /* let long filenames wrap/ellipsize instead of overflowing */
+}
+
+/* --- Cover thumbnail --- */
+.library-cover {
+  position: relative;
+  flex: 0 0 auto;
+  width: 60px;
+  aspect-ratio: 3 / 4;
+  border-radius: 6px;
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: linear-gradient(135deg, #34343c, #232229);
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.35);
+}
+
+.library-cover-img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.library-cover-fallback {
+  font-size: 1.5rem;
+  opacity: 0.55;
+}
+
+/* Type badge overlaid on the cover's corner. */
+.library-cover .doc-type-badge {
+  position: absolute;
+  top: 4px;
+  left: 4px;
+  font-size: 0.5rem;
+  padding: 0.05rem 0.28rem;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.4);
+}
+
+.library-card-main:hover:not(:disabled) {
+  background: transparent; /* the whole card lifts instead */
 }
 
 .library-card-main:disabled {
   cursor: default;
+}
+
+.library-card-resume {
+  margin-top: 0.1rem;
+  font-size: 0.74rem;
+  color: var(--accent-text);
+  opacity: 0.9;
 }
 
 .doc-type-badge {
@@ -141,24 +350,53 @@
 .library-card-name {
   font-weight: 600;
   word-break: break-word;
+  line-height: 1.3;
 }
 
 .library-card-status {
   font-size: 0.78rem;
-  color: #aaa;
+  color: var(--text-dim);
 }
 
+/* Floating action cluster, top-right of the card. Faded until the card is
+   hovered/focused (always visible on touch, which has no hover). */
 .library-card-actions {
+  position: absolute;
+  top: 0.45rem;
+  right: 0.45rem;
   display: flex;
-  flex-direction: column;
-  gap: 0.3rem;
-  padding: 0.5rem;
-  border-left: 1px solid #3a3a42;
+  gap: 0.2rem;
+  opacity: 0;
+  transition: opacity 0.15s ease;
+}
+
+.library-card:hover .library-card-actions,
+.library-card:focus-within .library-card-actions {
+  opacity: 1;
 }
 
 .library-card-actions .icon-btn {
-  font-size: 0.9rem;
-  padding: 0.3rem 0.4rem;
+  font-size: 0.8rem;
+  padding: 0.25rem 0.35rem;
+  background: rgba(0, 0, 0, 0.25);
+  border-color: transparent;
+}
+
+.library-card-actions .icon-btn:hover {
+  background: var(--panel-2);
+  border-color: var(--border);
+}
+
+.icon-btn.danger:hover {
+  background: var(--danger-bg);
+  border-color: var(--danger-text);
+}
+
+@media (hover: none) {
+  /* No hover on touch — keep the actions reachable. */
+  .library-card-actions {
+    opacity: 0.7;
+  }
 }
 
 .playback-bar {
@@ -174,23 +412,78 @@
   border-radius: 10px;
 }
 
-/* Avoid the iOS double-tap-to-zoom delay on controls. */
+/* --- Base controls -------------------------------------------------------- */
+/* Themed defaults for bare elements (low element-level specificity, so every
+   component class — .icon-btn, .play-btn, .thumb, … — still overrides freely).
+   Avoid the iOS double-tap-to-zoom delay on controls too. */
 button,
 select,
 input {
+  font: inherit;
   touch-action: manipulation;
+}
+
+button {
+  cursor: pointer;
+  color: var(--text);
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 0.45rem 0.75rem;
+  transition: background 0.15s ease, border-color 0.15s ease, transform 0.04s ease;
+}
+
+button:hover:not(:disabled) {
+  background: var(--btn-hover);
+  border-color: var(--btn-hover-border);
+}
+
+button:active:not(:disabled) {
+  transform: translateY(1px);
+}
+
+button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+select {
+  color: var(--text);
+  background-color: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 0.4rem 1.7rem 0.4rem 0.6rem;
+  cursor: pointer;
+  /* Replace the native dropdown arrow with a consistent chevron. */
+  appearance: none;
+  -webkit-appearance: none;
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'><path d='M2.5 4.5l3.5 3.5 3.5-3.5' fill='none' stroke='%239a9aa4' stroke-width='1.4' stroke-linecap='round' stroke-linejoin='round'/></svg>");
+  background-repeat: no-repeat;
+  background-position: right 0.55rem center;
+  background-size: 0.7rem;
+}
+
+select:hover {
+  border-color: var(--btn-hover-border);
+}
+
+/* A single, consistent keyboard-focus ring (the app had none). Pointer clicks
+   don't trigger :focus-visible, so this only shows for keyboard users. */
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
 }
 
 .home-btn {
   background: transparent;
-  border: 1px solid #555;
+  border: 1px solid var(--border);
   white-space: nowrap;
 }
 
 .progress {
   flex: 1;
   height: 10px;
-  background: #444;
+  background: var(--track);
   border-radius: 5px;
   overflow: hidden;
 }
@@ -248,7 +541,7 @@ input {
 .ocr-progress-track {
   flex: 1;
   height: 10px;
-  background: #444;
+  background: var(--track);
   border-radius: 5px;
   overflow: hidden;
 }
@@ -289,7 +582,7 @@ input {
 
 /* Make the processing state read as active, not stuck. */
 .state-chip.state-processing {
-  color: var(--accent);
+  color: var(--accent-text);
   opacity: 1;
 }
 
@@ -438,7 +731,7 @@ input {
 
 .icon-btn {
   background: transparent;
-  border: 1px solid #555;
+  border: 1px solid var(--border);
   font-size: 1.05rem;
   line-height: 1;
   padding: 0.4rem 0.55rem;
@@ -461,7 +754,7 @@ input {
 /* "Ready to play" cue: a one-tap, clearly-actionable button. */
 .play-btn.ready {
   background: var(--accent);
-  color: #1e1e22;
+  color: var(--accent-ink);
   border-color: var(--accent);
   animation: ready-pulse 1.4s ease-in-out infinite;
 }
@@ -478,7 +771,7 @@ input {
 .spinner {
   width: 1.05rem;
   height: 1.05rem;
-  border: 2px solid rgba(255, 255, 255, 0.3);
+  border: 2px solid var(--spinner-ring);
   border-top-color: var(--accent);
   border-radius: 50%;
   animation: spin 0.7s linear infinite;
@@ -510,7 +803,7 @@ input {
 }
 
 .synth-text {
-  color: var(--accent);
+  color: var(--accent-text);
 }
 
 .synth-line {
@@ -567,7 +860,7 @@ input {
   align-items: center;
   justify-content: space-between;
   padding: 0.6rem 0.7rem;
-  border-bottom: 1px solid #3a3a42;
+  border-bottom: 1px solid var(--border);
 }
 
 .nav-tabs {
@@ -578,21 +871,21 @@ input {
 .nav-tabs button {
   background: transparent;
   border: none;
-  color: #ccc;
+  color: var(--text-dim);
   padding: 0.4rem 0.6rem;
   border-radius: 6px;
   font-weight: 600;
 }
 
 .nav-tabs button.active {
-  background: #3a3a42;
-  color: var(--accent);
+  background: var(--panel-2);
+  color: var(--accent-text);
 }
 
 .nav-close {
   background: transparent;
   border: none;
-  color: #aaa;
+  color: var(--text-dim);
   font-size: 1rem;
 }
 
@@ -619,14 +912,14 @@ input {
   text-align: left;
   background: transparent;
   border: none;
-  color: #eee;
+  color: var(--text);
   padding: 0.55rem 0.8rem;
   border-radius: 6px;
   font-size: 0.9rem;
 }
 
 .chapter-list button:hover {
-  background: #34343c;
+  background: var(--panel-2);
 }
 
 .thumb-grid {
@@ -696,7 +989,7 @@ input {
   display: inline-flex;
   align-items: center;
   background: transparent;
-  border: 1px solid #555;
+  border: 1px solid var(--border);
 }
 
 .pdf-pager.floating.hidden {
@@ -706,8 +999,8 @@ input {
 }
 
 .error-banner {
-  background: #5a2330;
-  color: #ffd7d7;
+  background: var(--danger-bg);
+  color: var(--danger-text);
   padding: 0.6rem 0.9rem;
   border-radius: 8px;
   margin-bottom: 0.75rem;

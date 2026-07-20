@@ -1,3 +1,20 @@
+> **Implementation note (shipped):** The Kokoro worker below is designed around
+> **Kokoro ONNX via `onnxruntime-rocm`**; that was **abandoned during
+> implementation** (onnxruntime's ROCm EP wasn't usable on the RDNA3/gfx1101
+> card). The shipped worker uses the **PyTorch `kokoro` package (`KPipeline`) on
+> torch-rocm** — GPU when torch sees one, else CPU — so §3's ONNX
+> provider-priority machinery doesn't exist; device selection is just torch's.
+> Two more deltas from §3 as designed: `Synthesize` is a **unary** RPC that
+> writes the WAV to the shared volume and returns its path + duration (no
+> server-streamed audio bytes — consistent with the path contract elsewhere in
+> this doc), and the WAV is **16-bit PCM, not float32** (browser Web Audio
+> `decodeAudioData` silently fails on IEEE-float WAV). Phoneme durations are
+> returned empty; WhisperX forced alignment is the sole timing source. There is
+> no orchestrator retry loop: the worker degrades per-sentence instead
+> (progressively safer text renderings, then a proportional silence), and worker
+> calls carry deadlines that surface friendly errors when a worker hangs.
+> The `tts-synthesis` delta spec reflects the shipped behavior.
+
 ## Context
 
 This is a greenfield, self-hosted web application that reads a user's PDF/EPUB
@@ -159,7 +176,10 @@ Four services on one user-defined bridge network `readernet`:
 - A separate `modelcache` volume holds downloaded ONNX/wav2vec2 weights so
   rebuilds don't re-download multi-hundred-MB models.
 - Cleanup: a session's audio dir is deleted when the session is deleted
-  (`DELETE /api/sessions/{id}`) or by a TTL sweep (default 24 h).
+  (`DELETE /api/sessions/{id}`), when a new session supersedes it (a voice/speed
+  change or jump re-synth for the same document), when its document is deleted,
+  and — since sessions are in-memory only — all leftover session audio is purged
+  at API startup. (A TTL sweep was considered and is unnecessary given these.)
 
 #### 1.5 gRPC service boundaries
 
@@ -578,11 +598,14 @@ function frame() {
 
 #### 6.7 Auto-scroll
 
-- Keep the active word within a vertical margin band (e.g. 20–80% of viewport).
-  When it exits, `scrollIntoView({behavior:"smooth", block:"center"})` (PDF) or
-  `rendition.next()`/`display(cfi)` (EPUB).
-- A manual-scroll listener suspends auto-scroll for a grace period (~2.5 s),
-  then resumes.
+- When the active word CHANGES (playback advancing, seek, tap), always re-center
+  it — `scrollIntoView({behavior:"smooth", block:"center"})` on the PDF box or
+  the EPUB word span (advancing the section first if needed). Following the
+  voice deliberately wins over a recent manual scroll.
+- The manual-scroll grace period (~2.5 s) applies only to the PDF's "same word,
+  overlay boxes rebuilt" case (a chunk streaming in while paused, a page-turn
+  settling): there, scroll only if the word went off-screen and the user hasn't
+  scrolled recently — so a paused reader skimming ahead isn't yanked back.
 
 #### 6.8 UI states
 
@@ -829,7 +852,7 @@ volumes:
 | Network interruption during streaming | SignalR auto-reconnect; client re-`Subscribe`s; hub backfills missed `ChunkReady`; playback resumes at saved position. |
 | TTS transient/OOM error | Retry with backoff (max 3 / `RESOURCE_EXHAUSTED` brief delay); after limit, chunk `error`, session continues or fails per policy. |
 | Shared-volume write failure | `INTERNAL`; retry once; surface as session error if persistent. |
-| Voice changed mid-session | New session created; old session/audio eligible for cleanup. |
+| Voice changed mid-session | New session created; the old session and its audio are torn down immediately (supersede). |
 
 ## Risks / Trade-offs
 
@@ -866,5 +889,6 @@ change; nothing in production depends on it yet.
 - Persist session/word metadata to SQLite in v1, or stay in-memory (current
   decision: in-memory)?
 - Multi-language alignment now, or English-only v1 with lazy per-language load?
-- Cleanup policy: TTL sweep interval and whether to keep audio for replay across
-  restarts.
+- ~~Cleanup policy: TTL sweep interval and whether to keep audio for replay across
+  restarts.~~ Resolved: audio is never kept across restarts (purged at startup);
+  supersede/delete tear down a session's audio immediately, so no TTL sweep.

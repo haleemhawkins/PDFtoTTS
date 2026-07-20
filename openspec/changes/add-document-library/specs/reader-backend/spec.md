@@ -74,6 +74,32 @@ and SHALL update the document's `filename`/title, persisting the change.
 - **WHEN** a client PATCHes `/api/documents/{id}` with a blank name
 - **THEN** the response is HTTP 400 and the name is unchanged
 
+### Requirement: Save the reading position (cross-device resume)
+
+The backend SHALL expose `PUT /api/documents/{id}/position` accepting the
+reader's resume point (page, word, voice, speed, and the client's Unix-ms
+timestamp) and SHALL persist it on the document with last-writer-wins ordering
+by that timestamp, so a stale writer cannot clobber a newer position from
+another device. Timestamps far in the future SHALL be clamped so a skewed clock
+cannot permanently freeze the resume point. The stored position SHALL be
+returned with the document and survive API restarts.
+
+#### Scenario: Position round-trips
+
+- **WHEN** a client PUTs a position for an existing document
+- **THEN** the response is HTTP 200 with the updated `Document` and later reads
+  of the document include that position
+
+#### Scenario: Stale write is ignored
+
+- **WHEN** a client PUTs a position whose timestamp is older than the stored one
+- **THEN** the stored position is unchanged
+
+#### Scenario: Unknown document
+
+- **WHEN** a client PUTs a position for an id that does not exist
+- **THEN** the response is HTTP 404
+
 ### Requirement: Serve original document bytes
 
 The backend SHALL expose `GET /api/documents/{id}/original` returning the stored

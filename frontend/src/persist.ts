@@ -96,3 +96,33 @@ export function clearLegacyStorage(): void {
     /* ignore */
   }
 }
+
+// --- Cover thumbnail cache (rendered by LibraryCover, keyed by document id) ---
+
+const coverKey = (id: string) => `cover:${id}`;
+
+export function getCachedCover(id: string): string | null {
+  try {
+    return localStorage.getItem(coverKey(id));
+  } catch {
+    return null;
+  }
+}
+
+export function setCachedCover(id: string, dataUrl: string): void {
+  try {
+    localStorage.setItem(coverKey(id), dataUrl);
+  } catch {
+    /* storage full — the cover still shows this session, just isn't persisted */
+  }
+}
+
+/** Drop a document's cached cover (call when the document is deleted, so the
+ *  data URL doesn't linger in localStorage forever). */
+export function evictCoverCache(id: string): void {
+  try {
+    localStorage.removeItem(coverKey(id));
+  } catch {
+    /* storage unavailable — nothing to evict */
+  }
+}

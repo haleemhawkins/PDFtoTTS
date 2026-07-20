@@ -28,8 +28,8 @@ public class MockWorkersTests
         Assert.Equal("RIFF", Encoding.ASCII.GetString(bytes, 0, 4));
         Assert.Equal("WAVE", Encoding.ASCII.GetString(bytes, 8, 4));
         // 16-bit mono PCM at 24kHz; 1.05s → 25200 samples → 50400 data bytes.
-        Assert.Equal(BitConverter.ToInt16(bytes, 22), 1); // channels
-        Assert.Equal(BitConverter.ToInt32(bytes, 24), 24000); // sample rate
+        Assert.Equal((short)1, BitConverter.ToInt16(bytes, 22)); // channels
+        Assert.Equal(24000, BitConverter.ToInt32(bytes, 24)); // sample rate
         Assert.Equal(50400 + 44, bytes.Length);
     }
 

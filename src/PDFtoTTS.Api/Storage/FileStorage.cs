@@ -75,4 +75,16 @@ public sealed class LocalFileStorage : IFileStorage
         string dir = Path.Combine(_dataDir, "audio", sessionId.ToString());
         if (Directory.Exists(dir)) Directory.Delete(dir, recursive: true);
     }
+
+    /// <summary>Delete every session's audio (WAV chunks + HLS segments). Sessions
+    /// live only in memory, so audio left on the volume by a previous process is
+    /// unreachable — call this once at startup so it can't accumulate forever.</summary>
+    public void PurgeAllSessionAudio()
+    {
+        foreach (var dir in Directory.EnumerateDirectories(Path.Combine(_dataDir, "audio")))
+        {
+            try { Directory.Delete(dir, recursive: true); }
+            catch (IOException) { /* in use / already gone — best effort */ }
+        }
+    }
 }

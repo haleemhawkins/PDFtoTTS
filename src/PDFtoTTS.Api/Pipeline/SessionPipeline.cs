@@ -132,6 +132,11 @@ public sealed class SessionPipeline
         finally
         {
             _running.TryRemove(sessionId, out _);
+            // A cancelled session was torn down by whoever cancelled it (delete /
+            // supersede), but a chunk mid-synthesis may have landed on disk AFTER
+            // that cleanup — sweep again now the pipeline has actually stopped.
+            if (ct.IsCancellationRequested && _sessions.Get(sessionId) is null)
+                _files.DeleteSessionAudio(sessionId);
         }
     }
 

@@ -47,16 +47,17 @@ export function isIosWebkit(): boolean {
   return iOS || iPadOS || legacyIPad;
 }
 
-/** True when launched as an installed/standalone PWA (Home Screen app). */
-export function isStandalonePwa(): boolean {
-  const nav = navigator as Navigator & { standalone?: boolean };
-  return nav.standalone === true || window.matchMedia?.("(display-mode: standalone)").matches === true;
+/** iOS drives a media element's lock-screen transport natively. Resuming the
+ *  `<audio>` element via the system remote keeps its audio session active in the
+ *  background; a JS `play()` from the lock screen advances time but plays SILENTLY
+ *  until the app is foregrounded. So on iOS we leave play/pause to the OS and only
+ *  wire the richer transport actions (seek, page turns) through Media Session. */
+export function usesNativeMediaTransport(): boolean {
+  return isIosWebkit();
 }
 
 /** Pick the playback engine: media element on iOS (background audio), Web Audio
  *  elsewhere (proven gapless/seek behavior, unchanged). */
 export function createPlaybackEngine(): PlaybackEngine {
-  const engine = isIosWebkit() ? new MediaElementPlayer() : new AudioQueuePlayer();
-  console.info(`[tts] playback engine: ${engine.kind} (standalone PWA: ${isStandalonePwa()})`);
-  return engine;
+  return isIosWebkit() ? new MediaElementPlayer() : new AudioQueuePlayer();
 }

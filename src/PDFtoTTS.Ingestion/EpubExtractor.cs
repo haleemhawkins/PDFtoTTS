@@ -25,12 +25,15 @@ public sealed class EpubExtractor
     // all validation and salvage whatever content is present.
     private const EpubReaderOptionsPreset Options = EpubReaderOptionsPreset.IGNORE_ALL_ERRORS;
 
-    public ExtractionResult Extract(string path) => ExtractCore(EpubReader.ReadBook(path, Options));
+    public ExtractionResult Extract(string path) =>
+        ExtractCore(EpubReader.ReadBook(path, Options)
+            ?? throw new InvalidDataException($"Could not read EPUB '{path}'."));
 
     public ExtractionResult Extract(byte[] bytes)
     {
         using var ms = new MemoryStream(bytes);
-        return ExtractCore(EpubReader.ReadBook(ms, Options));
+        return ExtractCore(EpubReader.ReadBook(ms, Options)
+            ?? throw new InvalidDataException("Could not read EPUB from buffer."));
     }
 
     private static ExtractionResult ExtractCore(EpubBook book)

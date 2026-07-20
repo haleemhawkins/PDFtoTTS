@@ -72,7 +72,11 @@ builder.Services.AddSingleton<DocumentPipeline>();
 // Storage + pipeline runner.
 string dataDir = builder.Configuration["DATA_DIR"]
     ?? Path.Combine(Path.GetTempPath(), "pdftotts-data");
-builder.Services.AddSingleton<IFileStorage>(new LocalFileStorage(dataDir));
+var fileStorage = new LocalFileStorage(dataDir);
+// Sessions are in-memory only, so any audio left on the volume by a previous
+// process belongs to sessions that no longer exist — clear it at startup.
+fileStorage.PurgeAllSessionAudio();
+builder.Services.AddSingleton<IFileStorage>(fileStorage);
 builder.Services.AddSingleton<IDocumentStore, PersistentDocumentStore>();
 builder.Services.AddSingleton<ISessionStore, InMemorySessionStore>();
 builder.Services.AddSingleton<SessionPipeline>();
@@ -182,7 +186,7 @@ app.MapDelete("/api/documents/{id:guid}", (Guid id, IDocumentStore docs,
 // --- Sessions -------------------------------------------------------------
 
 app.MapPost("/api/documents/{id:guid}/sessions", (Guid id, CreateSessionRequest body,
-    IDocumentStore docs, ISessionStore sessions, SessionPipeline pipeline) =>
+    IDocumentStore docs, ISessionStore sessions, SessionPipeline pipeline, IFileStorage files) =>
 {
     if (docs.Get(id) is not { } stored)
         return Results.NotFound(new ErrorResponse("DOCUMENT_NOT_FOUND", $"No document {id}."));
@@ -192,11 +196,16 @@ app.MapPost("/api/documents/{id:guid}/sessions", (Guid id, CreateSessionRequest 
     if (string.IsNullOrWhiteSpace(body.Voice))
         return Results.BadRequest(new ErrorResponse("INVALID_VOICE", "A voice is required."));
 
-    // A new session supersedes any in-flight one for this document: cancel the
-    // others so their synthesis stops (the reader jumped to a new position / speed)
-    // instead of wastefully competing for the GPU.
+    // A new session supersedes any one for this document: cancel in-flight
+    // synthesis (the reader jumped to a new position / speed) and tear the old
+    // session down like DELETE /api/sessions would — otherwise every voice/speed
+    // change leaves an orphaned session and its audio on disk.
     foreach (var other in sessions.ForDocument(id))
+    {
         other.Cancellation.Cancel();
+        sessions.Remove(other.Session.Id);
+        files.DeleteSessionAudio(other.Session.Id);
+    }
 
     var startWord = Math.Max(0, body.StartWordIndex);
     var session = new TtsSession(Guid.NewGuid(), id, body.Voice, body.Speed,

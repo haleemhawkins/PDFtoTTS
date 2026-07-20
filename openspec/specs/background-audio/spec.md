@@ -1,4 +1,10 @@
-## ADDED Requirements
+# background-audio Specification
+
+## Purpose
+
+Keep narration playing on iOS while the screen is locked or the app is backgrounded, with lock-screen transport controls.
+
+## Requirements
 
 ### Requirement: Playback continues while screen is locked or app is backgrounded
 

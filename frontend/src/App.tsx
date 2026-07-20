@@ -10,8 +10,8 @@ import { usePdfDocument } from "./pdf/usePdfDocument";
 import * as api from "./api/client";
 import type { DocumentInfo, Voice } from "./api/types";
 import {
-  clearLegacyStorage, forgetDoc, getDocState, getLastOpenedId, patchDocState,
-  setLastOpenedId, updateSavedPage, updateSavedWord,
+  clearLegacyStorage, evictCoverCache, forgetDoc, getCachedCover, getDocState,
+  getLastOpenedId, patchDocState, setLastOpenedId, updateSavedPage, updateSavedWord,
 } from "./persist";
 import "./App.css";
 
@@ -79,7 +79,9 @@ export default function App() {
       setNav({ page, seq: 0 });
       setView("reader");
       setLastOpenedId(doc.id);
-      setMediaMetadata(doc.filename);
+      // Lock-screen now-playing card: title + the library's cover thumbnail
+      // (when one has been rendered/cached; otherwise title-only).
+      setMediaMetadata(doc.filename, getCachedCover(doc.id) ?? undefined);
       await reader.open(doc.id, v, sp, page, word);
     } catch (e) {
       console.error("Failed to open document", e);
@@ -233,6 +235,7 @@ export default function App() {
   const onDelete = async (doc: DocumentInfo) => {
     await api.deleteDocument(doc.id).catch((e) => console.error("delete failed", e));
     forgetDoc(doc.id);
+    evictCoverCache(doc.id);
     await loadDocuments();
   };
 
@@ -381,7 +384,7 @@ export default function App() {
               file={file}
               timeline={reader.timeline}
               activeIndex={reader.activeIndex}
-              onSeekToWord={reader.seekToWord}
+              onJumpToWord={reader.jumpToWord}
               onNavigate={reader.jumpToSourceWord}
               onToggleChrome={toggleChrome}
               onToc={setEpubToc}

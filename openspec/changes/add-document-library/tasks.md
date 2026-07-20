@@ -30,3 +30,9 @@
 
 - [x] 5.1 `dotnet build` + backend tests green; `npm run build` (tsc) + `vitest` green; lint clean.
 - [ ] 5.2 Manual/mock run: upload two docs, see both in library, rename one, delete one (audio cleaned up), reopen survives an API restart, switch voice mid-read and confirm it resumes at the current word.
+
+## 6. Shipped follow-ups (added after the initial change)
+
+- [x] 6.1 Cross-device resume: `ReadingPosition` on `Document`, `PUT /api/documents/{id}/position` (last-writer-wins by client timestamp, future-clamped), client pushes on leave-events + a 15s playing interval, open picks the newer of local/server position (backend test: `Saves_reading_position_with_last_writer_wins_and_survives_restart`).
+- [x] 6.2 Library cover thumbnails: `LibraryCover` renders PDF page 1 / EPUB cover lazily on card visibility, caches a small WebP data URL in localStorage (evicted on delete), reused as Media Session artwork.
+- [x] 6.3 Drag-and-drop upload dropzone + per-card "last read" resume hint.

@@ -47,7 +47,13 @@ export class MediaElementPlayer implements PlaybackEngine {
     audio.addEventListener("waiting", () => {
       if (this.playing) this.onUnderrun?.();
     });
-    audio.addEventListener("playing", () => this.onResumed?.());
+    // Covers a native (lock-screen) resume too, where playback restarts without a
+    // JS play() call — keep our `playing` intent in sync so the next OS pause is
+    // still recognised as an interruption below.
+    audio.addEventListener("playing", () => {
+      this.playing = true;
+      this.onResumed?.();
+    });
     // A `pause` while we still intend to be playing is an OS interruption (call /
     // another app grabbed the session): we never cleared `playing`. Capture it as a
     // clean pause; resume is an explicit Play tap. Backgrounding/locking does NOT

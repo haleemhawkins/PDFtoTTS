@@ -63,7 +63,7 @@ curl http://localhost:8080/api/sessions/<sessionId>/chunks
 
 ```bash
 # .NET: build + test the whole solution
-DOTNET_SYSTEM_NET_DISABLEIPV6=1 dotnet test        # 86 tests
+DOTNET_SYSTEM_NET_DISABLEIPV6=1 dotnet test        # 102 tests
 
 # Python workers: generate stubs, then run the (GPU-free) unit tests
 ./workers/gen_proto.sh
