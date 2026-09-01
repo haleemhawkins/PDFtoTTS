@@ -68,17 +68,24 @@ SHALL be removed regardless of recurrence.
 
 ### Requirement: EPUB text extraction with word position mapping
 
-The system SHALL extract reading-order text from EPUB documents using EpubNet,
-recording for each word its text, owning spine item (chapter href), a CFI-style
-locator, and a zero-based document word index. Because EPUB is reflowable, the
-system SHALL NOT attempt to capture absolute pixel bounding boxes server-side;
-on-screen position SHALL be resolved client-side via injected word spans.
+The system SHALL extract reading-order text from EPUB documents using
+VersOne.Epub for the container and AngleSharp for the XHTML, recording for each
+word its text, a `locator` of `{spineHref}#{ordinal}` naming its spine item and
+its position within it, and a zero-based document word index. Words SHALL be
+split per text node, so a word never spans inline elements and the browser can
+reproduce the same global index by walking the rendered DOM the same way.
+Because EPUB is reflowable, the system SHALL NOT attempt to capture absolute
+pixel bounding boxes server-side; on-screen position SHALL be resolved
+client-side via injected word spans. Malformed EPUBs SHALL be read with all
+validation suppressed so a spec violation salvages the readable content instead
+of failing the upload.
 
 #### Scenario: Word mapped to spine locator
 
 - **WHEN** an EPUB chapter paragraph is extracted
-- **THEN** each word has a `text`, a `page` value of `null`, a stable
-  `spineHref`, and a locator sufficient for the frontend to find the word span
+- **THEN** each word has a `text`, a `page` and `bbox` of `null`, and a
+  `locator` of `{spineHref}#{ordinal}` sufficient for the frontend to find the
+  word span
 
 #### Scenario: Markup is stripped but boundaries preserved
 
@@ -247,11 +254,12 @@ engine SHALL be observable (logged) per document.
 ### Requirement: Sentence terminators retained in synthesized chunk text
 
 The system SHALL re-attach sentence-ending punctuation (`.`, `?`, `!`) to the
-chunk text submitted for synthesis, even though normalization strips terminators
-from spoken token text and records them only as a boundary flag, so the voice
-receives sentence (period/question/exclamation) intonation and a sentence
-boundary it can pause on. The terminator-free token text SHALL still be used for
-forced alignment so alignment is not disturbed by punctuation.
+chunk text, even though normalization strips terminators from spoken token text
+and records them only as a boundary flag, so the voice receives sentence
+(period/question/exclamation) intonation and a sentence boundary it can pause
+on. `.` SHALL be used when a boundary is known but the exact mark was not
+recorded. The stored per-token text SHALL remain terminator-free so the merge
+can match tokens to aligned words.
 
 #### Scenario: Terminator re-attached for the voice
 
@@ -265,8 +273,8 @@ forced alignment so alignment is not disturbed by punctuation.
 - **THEN** the synthesized chunk text carries the exact terminator (not a generic
   period) so the voice uses the matching intonation
 
-#### Scenario: Alignment text stays terminator-free
+#### Scenario: Token text stays terminator-free
 
-- **WHEN** a chunk is force-aligned against its audio
-- **THEN** the transcript used for alignment contains no sentence terminators
-  appended by this step
+- **WHEN** the merge matches aligned words back to the chunk's tokens
+- **THEN** the token text it matches on carries no sentence terminator, so
+  punctuation cannot perturb the fuzzy match

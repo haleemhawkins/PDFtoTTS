@@ -117,8 +117,15 @@ SHALL re-trigger synthesis for the session via the backend.
 ### Requirement: UI state machine
 
 The frontend SHALL present distinct UI states — `idle`, `uploading`,
-`processing`, `playing`, `paused`, and `error` — driven by session status and
-playback state, and SHALL surface processing progress and recoverable errors.
+`extracting`, `processing`, `playing`, `paused`, `reconnecting`, and `error` —
+driven by document status, session status, and playback state, and SHALL surface
+extraction/OCR and synthesis progress and recoverable errors.
+
+#### Scenario: Extraction shows its own progress
+
+- **WHEN** an uploaded document is still extracting (including an OCR pass)
+- **THEN** the UI shows an `extracting` state driven by the document's
+  `progress`, distinct from synthesis `processing`
 
 #### Scenario: Processing shows progress
 
