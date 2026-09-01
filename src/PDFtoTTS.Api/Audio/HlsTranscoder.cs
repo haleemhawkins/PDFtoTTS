@@ -27,6 +27,32 @@ public sealed class HlsTranscoder
         _logger = logger;
     }
 
+    /// <summary>
+    /// Drop and dispose per-segment locks for a session that is being torn down,
+    /// so long-running hosts don't accumulate SemaphoreSlim entries forever.
+    /// Safe to call after (or before) the session's audio directory is deleted.
+    /// </summary>
+    public void DropLocksForSession(Guid sessionId)
+    {
+        string prefix = Path.GetFullPath(Path.Combine(_files.AudioSessionDir(sessionId), "hls"))
+            + Path.DirectorySeparatorChar;
+        foreach (var key in _locks.Keys)
+        {
+            string full;
+            try { full = Path.GetFullPath(key); }
+            catch { continue; }
+            // Match segment paths under this session's hls/ dir (or the dir itself).
+            if (!full.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)
+                && !string.Equals(full, prefix.TrimEnd(Path.DirectorySeparatorChar),
+                    StringComparison.OrdinalIgnoreCase))
+                continue;
+            if (_locks.TryRemove(key, out var gate))
+            {
+                try { gate.Dispose(); } catch { /* best effort */ }
+            }
+        }
+    }
+
     /// <summary>Build the EVENT m3u8 from the contiguous produced chunks (prefix from 0).</summary>
     public string BuildPlaylist(StoredSession session)
     {
@@ -132,12 +158,44 @@ public sealed class HlsTranscoder
 
         using var proc = Process.Start(psi)
             ?? throw new InvalidOperationException("failed to start ffmpeg");
-        string stderr = await proc.StandardError.ReadToEndAsync(ct);
-        await proc.WaitForExitAsync(ct);
-        if (proc.ExitCode != 0)
+        // Kill ffmpeg if the client disconnects or the session is torn down —
+        // otherwise orphan processes hold file handles under a session dir that
+        // may already have been deleted.
+        await using var killReg = ct.Register(() => TryKill(proc));
+        try
         {
-            _logger.LogError("ffmpeg failed ({Code}) for {Input}: {Err}", proc.ExitCode, input, stderr);
-            throw new InvalidOperationException($"ffmpeg exited {proc.ExitCode}");
+            string stderr = await proc.StandardError.ReadToEndAsync(ct);
+            await proc.WaitForExitAsync(ct);
+            if (proc.ExitCode != 0)
+            {
+                TryDelete(output);
+                _logger.LogError("ffmpeg failed ({Code}) for {Input}: {Err}", proc.ExitCode, input, stderr);
+                throw new InvalidOperationException($"ffmpeg exited {proc.ExitCode}");
+            }
         }
+        catch (OperationCanceledException)
+        {
+            TryKill(proc);
+            TryDelete(output);
+            throw;
+        }
+        catch
+        {
+            TryKill(proc);
+            TryDelete(output);
+            throw;
+        }
+    }
+
+    private static void TryKill(Process proc)
+    {
+        try { if (!proc.HasExited) proc.Kill(entireProcessTree: true); }
+        catch { /* best effort */ }
+    }
+
+    private static void TryDelete(string path)
+    {
+        try { if (File.Exists(path)) File.Delete(path); }
+        catch { /* best effort */ }
     }
 }

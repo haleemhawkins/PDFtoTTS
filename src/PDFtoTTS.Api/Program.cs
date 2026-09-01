@@ -85,6 +85,10 @@ builder.Services.AddSignalR();
 
 var app = builder.Build();
 
+// Catalogue may hold Extracting/Queued docs from a previous process; re-queue them
+// now that DocumentPipeline is wired (store load alone cannot resume work).
+app.Services.GetRequiredService<DocumentPipeline>().ResumeIncomplete();
+
 // --- Documents ------------------------------------------------------------
 
 app.MapPost("/api/documents", async (IFormFile file, IFileStorage files, IDocumentStore docs,
@@ -93,21 +97,17 @@ app.MapPost("/api/documents", async (IFormFile file, IFileStorage files, IDocume
     if (file is null || file.Length == 0)
         return Results.BadRequest(new ErrorResponse("EMPTY_FILE", "No file uploaded."));
 
-    using var ms = new MemoryStream();
-    await file.CopyToAsync(ms, ct);
-    var bytes = ms.ToArray();
-
-    var type = FileTypeDetector.Detect(bytes);
-    if (type is null)
+    // Stream straight to disk (sniff magic bytes from the temp file) so a large
+    // upload does not double-buffer in managed heap under the API mem_limit.
+    var id = Guid.NewGuid();
+    var (rel, type) = await files.SaveUploadAsync(id, file.OpenReadStream(), ct);
+    if (type is null || rel is null)
         return Results.Json(new ErrorResponse("UNSUPPORTED_FORMAT",
             "Only PDF and EPUB are supported."), statusCode: StatusCodes.Status415UnsupportedMediaType);
 
     // Extraction (and OCR for scanned PDFs) can take minutes, so it runs in the
     // background: persist the original, return an Extracting document immediately,
     // and let the client poll GET /api/documents/{id} until Ready or Error.
-    var id = Guid.NewGuid();
-    string rel = await files.SaveOriginalAsync(id, FileTypeDetector.Extension(type.Value), new MemoryStream(bytes), ct);
-
     var document = new Document(id, file.FileName, type.Value, 0, 0, DocumentStatus.Extracting);
     docs.Add(document, Array.Empty<PDFtoTTS.Core.TextPipeline.SourceWord>());
     pipeline.Start(document, rel);
@@ -169,13 +169,16 @@ app.MapPut("/api/documents/{id:guid}/position", (Guid id, UpdatePositionRequest 
 // original, and the persisted words. Synthesized audio is per-session, so this
 // just tears those down — nothing audio-related is persisted to begin with.
 app.MapDelete("/api/documents/{id:guid}", (Guid id, IDocumentStore docs,
-    ISessionStore sessions, IFileStorage files) =>
+    ISessionStore sessions, IFileStorage files, DocumentPipeline pipeline, HlsTranscoder hls) =>
 {
+    // Stop extraction/OCR first so a late File.Move cannot recreate the original.
+    pipeline.Cancel(id);
     foreach (var session in sessions.ForDocument(id))
     {
         session.Cancellation.Cancel();
         sessions.Remove(session.Session.Id);
         files.DeleteSessionAudio(session.Session.Id);
+        hls.DropLocksForSession(session.Session.Id);
     }
     if (docs.Remove(id) is not { } removed)
         return Results.NotFound(new ErrorResponse("DOCUMENT_NOT_FOUND", $"No document {id}."));
@@ -186,7 +189,8 @@ app.MapDelete("/api/documents/{id:guid}", (Guid id, IDocumentStore docs,
 // --- Sessions -------------------------------------------------------------
 
 app.MapPost("/api/documents/{id:guid}/sessions", (Guid id, CreateSessionRequest body,
-    IDocumentStore docs, ISessionStore sessions, SessionPipeline pipeline, IFileStorage files) =>
+    IDocumentStore docs, ISessionStore sessions, SessionPipeline pipeline, IFileStorage files,
+    HlsTranscoder hls) =>
 {
     if (docs.Get(id) is not { } stored)
         return Results.NotFound(new ErrorResponse("DOCUMENT_NOT_FOUND", $"No document {id}."));
@@ -205,6 +209,7 @@ app.MapPost("/api/documents/{id:guid}/sessions", (Guid id, CreateSessionRequest 
         other.Cancellation.Cancel();
         sessions.Remove(other.Session.Id);
         files.DeleteSessionAudio(other.Session.Id);
+        hls.DropLocksForSession(other.Session.Id);
     }
 
     var startWord = Math.Max(0, body.StartWordIndex);
@@ -274,12 +279,14 @@ app.MapGet("/api/sessions/{id:guid}/hls/{name}", async (Guid id, string name, Ht
     ctx.Response.StatusCode = StatusCodes.Status404NotFound;
 });
 
-app.MapDelete("/api/sessions/{id:guid}", (Guid id, ISessionStore sessions, IFileStorage files) =>
+app.MapDelete("/api/sessions/{id:guid}", (Guid id, ISessionStore sessions, IFileStorage files,
+    HlsTranscoder hls) =>
 {
     if (sessions.Get(id) is not { } s) return Results.NotFound();
     s.Cancellation.Cancel();
     sessions.Remove(id);
     files.DeleteSessionAudio(id);
+    hls.DropLocksForSession(id);
     return Results.NoContent();
 });
 

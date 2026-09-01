@@ -152,6 +152,10 @@ services:
         condition: service_healthy
       whisperx-align:
         condition: service_healthy
+      # Wait for Surya too: early scanned-PDF uploads otherwise hit a not-ready
+      # OCR worker, time out, and fall back to slower ocrmypdf.
+      surya-ocr:
+        condition: service_healthy
     restart: unless-stopped
 
   # Serves the built React SPA via nginx and proxies /api + /hubs to the api.

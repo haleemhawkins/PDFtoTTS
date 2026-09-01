@@ -11,6 +11,14 @@ namespace PDFtoTTS.Api.Storage;
 public interface IFileStorage
 {
     Task<string> SaveOriginalAsync(Guid documentId, string extension, Stream content, CancellationToken ct);
+    /// <summary>
+    /// Stream an upload straight to a temp file under originals/, sniff magic bytes,
+    /// then rename into place. Avoids buffering the whole body in managed heap
+    /// (uploads can be hundreds of MB). Returns null type for unsupported content
+    /// (temp file is deleted).
+    /// </summary>
+    Task<(string? RelativePath, DocumentType? Type)> SaveUploadAsync(
+        Guid documentId, Stream content, CancellationToken ct);
     string AudioRelativePath(Guid sessionId, int chunkIndex);
     string AudioFullPath(Guid sessionId, int chunkIndex);
     /// <summary>Absolute path to a session's audio directory (chunks + HLS segments).</summary>
@@ -42,6 +50,48 @@ public sealed class LocalFileStorage : IFileStorage
         await using var fs = File.Create(full);
         await content.CopyToAsync(fs, ct);
         return rel;
+    }
+
+    public async Task<(string? RelativePath, DocumentType? Type)> SaveUploadAsync(
+        Guid documentId, Stream content, CancellationToken ct)
+    {
+        string tempRel = Path.Combine("originals", $"{documentId}.upload");
+        string tempFull = Path.Combine(_dataDir, tempRel);
+        try
+        {
+            await using (var fs = File.Create(tempFull))
+                await content.CopyToAsync(fs, ct);
+
+            // Sniff magic bytes from the on-disk file (PDF / EPUB zip header).
+            byte[] head = new byte[512];
+            int n;
+            await using (var fs = File.OpenRead(tempFull))
+                n = await fs.ReadAsync(head.AsMemory(0, head.Length), ct);
+
+            var type = FileTypeDetector.Detect(head.AsSpan(0, n));
+            if (type is null)
+            {
+                TryDelete(tempFull);
+                return (null, null);
+            }
+
+            string rel = Path.Combine("originals",
+                $"{documentId}{FileTypeDetector.Extension(type.Value)}");
+            string full = Path.Combine(_dataDir, rel);
+            File.Move(tempFull, full, overwrite: true);
+            return (rel, type);
+        }
+        catch
+        {
+            TryDelete(tempFull);
+            throw;
+        }
+    }
+
+    private static void TryDelete(string path)
+    {
+        try { if (File.Exists(path)) File.Delete(path); }
+        catch { /* best effort */ }
     }
 
     public string AudioRelativePath(Guid sessionId, int chunkIndex) =>
