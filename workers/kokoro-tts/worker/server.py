@@ -15,6 +15,7 @@ from .audio import write_wav
 from .backend import SynthBackend
 from .errors import InvalidInput, ResourceExhausted, TransientError
 from .health import HealthState
+from shared.paths import UnsafePath, resolve_under_data
 
 logger = logging.getLogger(__name__)
 
@@ -55,7 +56,10 @@ class KokoroServicer(kokoro_pb2_grpc.KokoroTtsServicer):
         finally:
             self._sem.release()
 
-        full_path = os.path.join(self._data_dir, request.out_path)
+        try:
+            full_path = resolve_under_data(self._data_dir, request.out_path)
+        except UnsafePath as exc:
+            context.abort(grpc.StatusCode.INVALID_ARGUMENT, str(exc))
         try:
             duration = write_wav(full_path, result.samples, result.sample_rate)
         except OSError as exc:

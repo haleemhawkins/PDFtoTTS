@@ -79,6 +79,20 @@ def test_transient_backend_error_maps_to_unavailable(tmp_path):
     assert e.value.code == grpc.StatusCode.UNAVAILABLE
 
 
+def test_absolute_out_path_is_rejected(tmp_path):
+    servicer = KokoroServicer(FakeBackend(), data_dir=str(tmp_path))
+    with pytest.raises(Aborted) as e:
+        servicer.Synthesize(make_request(out_path="/etc/passwd"), FakeContext())
+    assert e.value.code == grpc.StatusCode.INVALID_ARGUMENT
+
+
+def test_dotdot_out_path_is_rejected(tmp_path):
+    servicer = KokoroServicer(FakeBackend(), data_dir=str(tmp_path))
+    with pytest.raises(Aborted) as e:
+        servicer.Synthesize(make_request(out_path="../outside.wav"), FakeContext())
+    assert e.value.code == grpc.StatusCode.INVALID_ARGUMENT
+
+
 def test_list_voices():
     servicer = KokoroServicer(FakeBackend())
     resp = servicer.ListVoices(common_pb2.ListVoicesRequest(), FakeContext())
