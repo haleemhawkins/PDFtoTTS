@@ -1,4 +1,5 @@
-"""WAV writing for synthesized audio (design §3.4: PCM float32, mono)."""
+"""WAV writing for synthesized audio (mono PCM_16 — browsers cannot reliably
+decode IEEE-float WAV via decodeAudioData)."""
 from __future__ import annotations
 
 import os
@@ -9,8 +10,11 @@ import soundfile as sf
 
 def write_wav(path: str, samples, sample_rate: int) -> float:
     """
-    Write mono float32 PCM to `path` and return its duration in seconds.
+    Write mono PCM_16 WAV to `path` and return its duration in seconds.
     Parent directories are created as needed.
+
+    Input samples may be float in [-1, 1]; soundfile scales them to int16.
+    Do NOT switch to float32 subtype — decodeAudioData fails silently on it.
     """
     parent = os.path.dirname(path)
     if parent:
