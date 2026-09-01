@@ -883,12 +883,30 @@ independently buildable/testable (mock gRPC for the api, fixture WAV+transcript
 for alignment, golden-text fixtures for normalization). Rollback = revert the
 change; nothing in production depends on it yet.
 
-## Open Questions
+## Resolved Questions
 
-- Default voice + which Kokoro voice pack ships in the image?
-- Persist session/word metadata to SQLite in v1, or stay in-memory (current
-  decision: in-memory)?
-- Multi-language alignment now, or English-only v1 with lazy per-language load?
-- ~~Cleanup policy: TTL sweep interval and whether to keep audio for replay across
-  restarts.~~ Resolved: audio is never kept across restarts (purged at startup);
+All four are settled by what shipped.
+
+- **Default voice + which Kokoro voice pack ships in the image?** Default is
+  `af_heart` (`useReader.ts` `voiceRef`, and the warmup pass in
+  `KokoroBackend.load`). No voice pack is baked into the image: `_fetch_voice_ids()`
+  lists `voices/*.pt` from the `hexgrad/Kokoro-82M` HF repo at startup and falls
+  back to a seven-voice core set if the listing is unreachable. Weights land in
+  the `modelcache` volume on first use, so the image stays small and the voice
+  list follows the upstream repo.
+- **Persist session/word metadata to SQLite in v1, or stay in-memory?** Split, and
+  no SQLite. Documents and extracted words persist as JSON on the shared volume
+  (`catalogue.json`, `words/{id}.json`) through `PersistentDocumentStore`, so the
+  library and any OCR result survive a restart. Sessions stay in
+  `InMemorySessionStore` and their audio is purged at startup, because a session
+  is a disposable render of a document, not a durable record.
+- **Multi-language alignment now, or English-only v1 with lazy per-language load?**
+  Lazy per-language, with English preloaded. `WhisperXBackend` caches one wav2vec2
+  model per language code in `_models`; the server preloads and warms
+  `ALIGN_LANGUAGE` (default `en`, set to `en` in compose) before serving, and
+  `align()` calls `preload()` for whatever language the request names, so another
+  language costs one load on first use. Kokoro mirrors this with a `KPipeline` per
+  language code created on demand.
+- **Cleanup policy: TTL sweep interval and whether to keep audio for replay across
+  restarts.** Audio is never kept across restarts (purged at startup);
   supersede/delete tear down a session's audio immediately, so no TTL sweep.
