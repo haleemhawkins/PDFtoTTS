@@ -14,6 +14,7 @@ import ocr_pb2_grpc
 from .backend import OcrBackend
 from .errors import InvalidInput, ResourceExhausted, TransientError
 from .health import HealthState
+from shared.paths import UnsafePath, resolve_under_data
 
 logger = logging.getLogger(__name__)
 
@@ -30,7 +31,10 @@ class OcrServicer(ocr_pb2_grpc.OcrServicer):
         if not (request.pdf_path or "").strip():
             context.abort(grpc.StatusCode.INVALID_ARGUMENT, "pdf_path is empty")
 
-        full_path = os.path.join(self._data_dir, request.pdf_path)
+        try:
+            full_path = resolve_under_data(self._data_dir, request.pdf_path)
+        except UnsafePath as exc:
+            context.abort(grpc.StatusCode.INVALID_ARGUMENT, str(exc))
         if not os.path.exists(full_path):
             context.abort(grpc.StatusCode.INVALID_ARGUMENT, f"pdf not found: {request.pdf_path}")
 

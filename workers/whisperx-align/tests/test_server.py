@@ -58,6 +58,26 @@ def test_align_returns_words_and_flags_low_confidence(tmp_path):
     assert resp.words[1].low_confidence is True  # 0.1 < 0.30
 
 
+def test_absolute_audio_path_is_rejected(tmp_path):
+    servicer = AlignmentServicer(FakeBackend(), data_dir=str(tmp_path))
+    with pytest.raises(Aborted) as e:
+        servicer.Align(
+            alignment_pb2.AlignRequest(
+                audio_path="/etc/passwd", transcript="hello", language="en"),
+            FakeContext())
+    assert e.value.code == grpc.StatusCode.INVALID_ARGUMENT
+
+
+def test_dotdot_audio_path_is_rejected(tmp_path):
+    servicer = AlignmentServicer(FakeBackend(), data_dir=str(tmp_path))
+    with pytest.raises(Aborted) as e:
+        servicer.Align(
+            alignment_pb2.AlignRequest(
+                audio_path="../outside.wav", transcript="hello", language="en"),
+            FakeContext())
+    assert e.value.code == grpc.StatusCode.INVALID_ARGUMENT
+
+
 def test_empty_transcript_is_invalid_argument(tmp_path):
     rel = _audio(tmp_path)
     servicer = AlignmentServicer(FakeBackend(), data_dir=str(tmp_path))

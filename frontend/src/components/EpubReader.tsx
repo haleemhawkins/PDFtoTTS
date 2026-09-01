@@ -80,6 +80,10 @@ export const EpubReader = forwardRef<EpubReaderHandle, Props>(function EpubReade
   ref,
 ) {
   const [buffer, setBuffer] = useState<ArrayBuffer | null>(null);
+  // Section global bases must be ready before EpubView mounts — the content
+  // hook injects word spans with those bases, and a `?? 0` fallback while the
+  // spine scan is still running collides every chapter onto base 0.
+  const [sectionsReady, setSectionsReady] = useState(false);
   const [location, setLocation] = useState<string | number | null>(null);
 
   const rootRef = useRef<HTMLDivElement>(null);
@@ -208,6 +212,9 @@ export const EpubReader = forwardRef<EpubReaderHandle, Props>(function EpubReade
   // Load the EPUB once. EpubView takes the ArrayBuffer as its url.
   useEffect(() => {
     let cancelled = false;
+    setSectionsReady(false);
+    sectionsRef.current = [];
+    setBuffer(null);
     file.arrayBuffer().then((buf) => {
       if (!cancelled) setBuffer(buf);
     });
@@ -218,10 +225,12 @@ export const EpubReader = forwardRef<EpubReaderHandle, Props>(function EpubReade
 
   // Per-section base index = cumulative word count of earlier sections. Computed
   // from a throwaway Book (a copy of the buffer) so counting never loads/unloads
-  // the sections the rendition is actively displaying.
+  // the sections the rendition is actively displaying. EpubView mounts only after
+  // this finishes (sectionsReady), so injectWordSpans never falls back to base 0.
   useEffect(() => {
     if (!buffer) return;
     let cancelled = false;
+    setSectionsReady(false);
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     let book: any;
     (async () => {
@@ -252,7 +261,10 @@ export const EpubReader = forwardRef<EpubReaderHandle, Props>(function EpubReade
           /* skip unreadable section */
         }
       }
-      if (!cancelled) sectionsRef.current = sections;
+      if (!cancelled) {
+        sectionsRef.current = sections;
+        setSectionsReady(true);
+      }
       book.destroy?.();
     })();
     return () => {
@@ -296,10 +308,11 @@ export const EpubReader = forwardRef<EpubReaderHandle, Props>(function EpubReade
       // epub.js fires this with a Contents object that exposes only `sectionIndex`
       // (the spine position) — NOT a `.section`/`.href`. sectionsRef is built in
       // spine order, so resolve the section (and its global word base) by index.
-      // (Matching by href silently failed → every section injected from base 0,
-      // colliding word indices across chapters.)
+      // EpubView only mounts after sectionsReady, so a missing section is a real
+      // mismatch (not a race) — skip injection rather than defaulting to base 0.
       const section = sectionsRef.current[contents.sectionIndex];
-      injectWordSpans(contents.document.body, section?.base ?? 0);
+      if (!section) return;
+      injectWordSpans(contents.document.body, section.base);
 
       // PDF parity: tap a word → read from there; tap the background → toggle
       // chrome. The SOURCE index goes up as-is — jumpToWord seeks when the word
@@ -410,7 +423,7 @@ export const EpubReader = forwardRef<EpubReaderHandle, Props>(function EpubReade
 
   return (
     <div className="epub-reader" ref={rootRef}>
-      {buffer && (
+      {buffer && sectionsReady && (
         <EpubView
           url={buffer}
           location={location}

@@ -9,33 +9,69 @@ The .NET API: document library CRUD + persistence, TTS session lifecycle and str
 ### Requirement: Document upload endpoint
 
 The backend SHALL expose `POST /api/documents` accepting a multipart file
-upload, validate it by content, persist the original to the shared volume, and
-return a `Document` with a generated id and status `queued`.
+upload, stream it to the shared volume, validate it by content (magic bytes,
+not extension), and return a `Document` with a generated id and status
+`extracting`. Extraction (and OCR for scanned PDFs) runs in the background, so
+the response returns immediately and the client polls
+`GET /api/documents/{id}` until `ready` or `error`.
 
 #### Scenario: Valid upload accepted
 
 - **WHEN** a client POSTs a valid PDF to `/api/documents`
 - **THEN** the response is HTTP 201 with a `Document` body containing `id`,
-  `filename`, `type`, and `status="queued"`, and the file is stored under the
-  shared volume keyed by document id
+  `filename`, `type`, and `status="extracting"`, and the file is stored under
+  the shared volume keyed by document id
 
 #### Scenario: Oversized upload rejected
 
-- **WHEN** an upload exceeds the configured maximum size
+- **WHEN** an upload exceeds the configured maximum size (`UPLOAD_MAX_MB`,
+  default 256)
 - **THEN** the response is HTTP 413 and no document is created
+
+#### Scenario: Unsupported content rejected
+
+- **WHEN** the uploaded bytes are neither a PDF nor an EPUB
+- **THEN** the response is HTTP 415 with code `UNSUPPORTED_FORMAT`, the
+  temporary upload is deleted, and no document is created
+
+#### Scenario: Empty upload rejected
+
+- **WHEN** the request carries no file or a zero-length file
+- **THEN** the response is HTTP 400 with code `EMPTY_FILE`
 
 ### Requirement: Session creation and lifecycle
 
 The backend SHALL expose `POST /api/documents/{id}/sessions` to start a
-`TtsSession` with a chosen voice, speed, and language, and SHALL advance the
-session through the states `queued → processing → streaming → complete`, or to
-`error`, exposing current state and progress.
+`TtsSession` with a chosen voice, speed, language, and optional
+`startWordIndex` (default 0), and SHALL advance the session through the states
+`processing → streaming → complete`, or to `error`, exposing current state and
+progress. Creating a session SHALL supersede any existing session for that
+document: the previous session is cancelled, removed, and its audio deleted, so
+a voice or speed change cannot leave orphaned sessions or audio on the volume.
 
 #### Scenario: Session starts processing
 
-- **WHEN** a client creates a session for a queued document
+- **WHEN** a client creates a session for a `ready` document
 - **THEN** the response is HTTP 201 with a `TtsSession` whose status is
   `processing` and the orchestration pipeline begins
+
+#### Scenario: Session over a document that is not ready
+
+- **WHEN** a client creates a session while the document is still `extracting`
+- **THEN** the response is HTTP 409 with code `DOCUMENT_NOT_READY` and no
+  session is created
+
+#### Scenario: Synthesis begins at the requested word
+
+- **WHEN** a client creates a session with a non-zero `startWordIndex`
+- **THEN** tokens ending before that source word are skipped and chunk 0 begins
+  at the reader's position rather than the start of the document
+
+#### Scenario: A new session supersedes the old one
+
+- **WHEN** a client creates a second session for the same document
+- **THEN** the first session is cancelled and removed and its audio directory is
+  deleted before the new session starts
 
 #### Scenario: Session progress is queryable
 
@@ -51,9 +87,12 @@ session through the states `queued → processing → streaming → complete`, o
 
 ### Requirement: SignalR reader hub
 
-The backend SHALL host a SignalR hub at `/hubs/reader` allowing a client to
-subscribe to a session and receive `ChunkReady`, `Progress`, `SessionStatus`,
-and `Error` events; clients SHALL be able to join only sessions they own.
+The backend SHALL host a SignalR hub at `/hubs/reader` with `Subscribe` and
+`Unsubscribe` methods taking a session id, placing the caller in that session's
+group to receive `ChunkReady`, `Progress`, `SessionStatus`, and `Error` events.
+The deployment is single-user and self-hosted, so the hub applies no
+authentication or per-session ownership check; an unparseable session id is
+ignored rather than faulted.
 
 #### Scenario: Client receives chunks in order
 
@@ -249,6 +288,56 @@ without re-uploading it.
 
 - **WHEN** the document id is unknown or its original file is absent
 - **THEN** the response is HTTP 404
+
+### Requirement: Document and session read endpoints
+
+The backend SHALL expose `GET /api/documents/{id}` for a single document's
+metadata and `GET /api/documents/{id}/words` for its extracted source words, and
+`GET /api/sessions/{id}` and `GET /api/sessions/{id}/chunks` for a session and
+the `ProcessedChunk`s completed so far, each returning HTTP 404 for an unknown
+id. It SHALL expose `DELETE /api/sessions/{id}`, which cancels the session,
+removes it, and deletes its audio.
+
+#### Scenario: Extracted words are readable
+
+- **WHEN** a client GETs `/api/documents/{id}/words` for a `ready` document
+- **THEN** the response is HTTP 200 with the ordered `SourceWord` array the
+  reader uses to place highlights
+
+#### Scenario: Completed chunks are snapshot-readable
+
+- **WHEN** a client GETs `/api/sessions/{id}/chunks` mid-synthesis
+- **THEN** the response is HTTP 200 with the chunks completed so far, so a client
+  can catch up without the hub
+
+#### Scenario: Session deleted
+
+- **WHEN** a client DELETEs `/api/sessions/{id}`
+- **THEN** the response is HTTP 204, synthesis is cancelled, and the session's
+  audio directory is removed
+
+### Requirement: Voice catalogue and health
+
+The backend SHALL expose `GET /api/voices`, proxying the TTS worker's voice list,
+and `GET /healthz`, which probes both GPU workers with a short deadline.
+
+#### Scenario: Voices listed
+
+- **WHEN** a client GETs `/api/voices` and the TTS worker is reachable
+- **THEN** the response is HTTP 200 with the worker's voices as
+  `{id, label, language, gender}`
+
+#### Scenario: Voice list degrades to empty
+
+- **WHEN** the TTS worker is unreachable
+- **THEN** `GET /api/voices` still returns HTTP 200 with an empty array rather
+  than failing the client
+
+#### Scenario: Health reflects the workers
+
+- **WHEN** both workers report `SERVING`
+- **THEN** `GET /healthz` returns HTTP 200 `{"status":"healthy"}`; otherwise it
+  returns HTTP 503 with `degraded` or `workers_unreachable`
 
 ### Requirement: Per-session HLS endpoint
 

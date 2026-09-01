@@ -15,6 +15,7 @@ from .backend import AlignBackend
 from .confidence import is_low_confidence
 from .errors import InvalidInput, ResourceExhausted, TransientError
 from .health import HealthState
+from shared.paths import UnsafePath, resolve_under_data
 
 logger = logging.getLogger(__name__)
 
@@ -33,7 +34,10 @@ class AlignmentServicer(alignment_pb2_grpc.AlignmentServicer):
         if not (request.transcript or "").strip():
             context.abort(grpc.StatusCode.INVALID_ARGUMENT, "transcript is empty")
 
-        full_path = os.path.join(self._data_dir, request.audio_path)
+        try:
+            full_path = resolve_under_data(self._data_dir, request.audio_path)
+        except UnsafePath as exc:
+            context.abort(grpc.StatusCode.INVALID_ARGUMENT, str(exc))
         if not os.path.exists(full_path):
             context.abort(grpc.StatusCode.INVALID_ARGUMENT, f"audio not found: {request.audio_path}")
 

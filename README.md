@@ -69,6 +69,7 @@ DOTNET_SYSTEM_NET_DISABLEIPV6=1 dotnet test        # 102 tests
 ./workers/gen_proto.sh
 cd workers/kokoro-tts     && pip install -r requirements-dev.txt && pytest   # incl. WAV-format + text-sanitizer regression guards
 cd workers/whisperx-align && pip install -r requirements-dev.txt && pytest
+cd workers/shared         && pytest        # shared path guard (no deps beyond pytest)
 
 # Frontend unit tests
 cd frontend && npm test
@@ -95,4 +96,5 @@ cd frontend && npx playwright install chromium && npm run test:e2e
 | `src/PDFtoTTS.Api` | REST + SignalR host, gRPC client adapters |
 | `workers/kokoro-tts` | Kokoro TTS gRPC worker |
 | `workers/whisperx-align` | WhisperX alignment gRPC worker |
+| `workers/shared` | code shared by the workers (copied to `/app/shared` in each image) |
 | `tests/` | .NET unit + integration tests |

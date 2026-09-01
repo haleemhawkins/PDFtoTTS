@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using Microsoft.AspNetCore.SignalR;
+using PDFtoTTS.Api.Audio;
 using PDFtoTTS.Api.Contracts;
 using PDFtoTTS.Api.Hubs;
 using PDFtoTTS.Api.Storage;
@@ -20,6 +21,7 @@ public sealed class SessionPipeline
     private readonly IDocumentStore _documents;
     private readonly ISessionStore _sessions;
     private readonly IFileStorage _files;
+    private readonly HlsTranscoder _hls;
     private readonly IHubContext<ReaderHub> _hub;
     private readonly TextNormalizer _normalizer;
     private readonly ILogger<SessionPipeline> _logger;
@@ -33,6 +35,7 @@ public sealed class SessionPipeline
         IDocumentStore documents,
         ISessionStore sessions,
         IFileStorage files,
+        HlsTranscoder hls,
         IHubContext<ReaderHub> hub,
         TextNormalizer normalizer,
         ILogger<SessionPipeline> logger,
@@ -42,6 +45,7 @@ public sealed class SessionPipeline
         _documents = documents;
         _sessions = sessions;
         _files = files;
+        _hls = hls;
         _hub = hub;
         _normalizer = normalizer;
         _logger = logger;
@@ -136,7 +140,10 @@ public sealed class SessionPipeline
             // supersede), but a chunk mid-synthesis may have landed on disk AFTER
             // that cleanup — sweep again now the pipeline has actually stopped.
             if (ct.IsCancellationRequested && _sessions.Get(sessionId) is null)
+            {
                 _files.DeleteSessionAudio(sessionId);
+                _hls.DropLocksForSession(sessionId);
+            }
         }
     }
 

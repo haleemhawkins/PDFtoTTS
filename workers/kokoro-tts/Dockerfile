@@ -17,6 +17,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Contracts + source, then generate the gRPC stubs into /app/generated.
 COPY proto/ /proto/
 COPY workers/kokoro-tts/ /app/
+COPY workers/shared/ /app/shared/
 RUN mkdir -p /app/generated \
  && python -m grpc_tools.protoc -I /proto \
       --python_out=/app/generated --grpc_python_out=/app/generated \

@@ -17,6 +17,7 @@ RUN echo "torch==$(python -c 'import torch; print(torch.__version__)')" > /tmp/c
 
 COPY proto/ /proto/
 COPY workers/surya-ocr/ /app/
+COPY workers/shared/ /app/shared/
 RUN mkdir -p /app/generated \
  && python -m grpc_tools.protoc -I /proto \
       --python_out=/app/generated --grpc_python_out=/app/generated \

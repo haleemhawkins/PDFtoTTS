@@ -52,11 +52,19 @@ than dropping the words.
   orchestrator interpolates its window from neighboring high-confidence anchors
   so highlighting never stalls or skips
 
-#### Scenario: Whole-chunk alignment failure falls back
+#### Scenario: Chunk with no usable timings falls back
 
-- **WHEN** alignment fails for an entire chunk
-- **THEN** the orchestrator synthesizes evenly distributed timings from the
-  chunk's audio duration and word count and marks the chunk degraded
+- **WHEN** the worker returns no aligned words for a chunk, or none of them match
+  its expected tokens
+- **THEN** the merge interpolates every source word evenly across the chunk's
+  audio duration and marks the chunk degraded, so highlighting still advances
+
+#### Scenario: An unreachable aligner errors the session
+
+- **WHEN** the `Align` call itself fails (deadline exceeded, worker down, or an
+  internal worker error)
+- **THEN** the session transitions to `error` with a message naming the alignment
+  worker, rather than degrading that chunk to interpolated timings
 
 ### Requirement: Normalized-token edge cases
 
