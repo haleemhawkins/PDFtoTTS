@@ -66,7 +66,7 @@
 
 - [x] 8.1 `openspec validate add-tts-reader --strict` passes.
 - [x] 8.2 README run instructions (Arch + ROCm prerequisites, `HSA_OVERRIDE`, first-run model download).
-- [ ] 8.3 Resolve design Open Questions (default voice, in-memory vs SQLite, multi-language scope, cleanup TTL).
+- [x] 8.3 Resolve design Open Questions (default voice, in-memory vs SQLite, multi-language scope, cleanup TTL). Answered from the shipped code in design.md "Resolved Questions".
 
 ## 9. Reader UX refinements (post-plan, from real-device use)
 

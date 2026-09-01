@@ -29,7 +29,7 @@
 ## 5. Verification
 
 - [x] 5.1 `dotnet build` + backend tests green; `npm run build` (tsc) + `vitest` green; lint clean.
-- [ ] 5.2 Manual/mock run: upload two docs, see both in library, rename one, delete one (audio cleaned up), reopen survives an API restart, switch voice mid-read and confirm it resumes at the current word.
+- [x] 5.2 Mock run against a live API (`USE_MOCK_WORKERS=true`), over HTTP rather than the browser: uploaded two PDFs and saw both listed most-recent-first; renamed one (blank name -> 400); deleted the other mid-synthesis and confirmed its audio dir, original, and words file were removed and a repeat DELETE returned 404; restarted the API against the same `DATA_DIR` and the renamed document came back Ready with its 16 words and no re-extraction; created a second session with a new voice, speed, and `startWordIndex: 8`, which 404'd the first session, deleted its audio, and began chunk 0 at source word 8 ("India").
 
 ## 6. Shipped follow-ups (added after the initial change)
 

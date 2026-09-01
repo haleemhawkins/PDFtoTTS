@@ -64,11 +64,12 @@ engine SHALL be observable (logged) per document.
 ### Requirement: Sentence terminators retained in synthesized chunk text
 
 The system SHALL re-attach sentence-ending punctuation (`.`, `?`, `!`) to the
-chunk text submitted for synthesis, even though normalization strips terminators
-from spoken token text and records them only as a boundary flag, so the voice
-receives sentence (period/question/exclamation) intonation and a sentence
-boundary it can pause on. The terminator-free token text SHALL still be used for
-forced alignment so alignment is not disturbed by punctuation.
+chunk text, even though normalization strips terminators from spoken token text
+and records them only as a boundary flag, so the voice receives sentence
+(period/question/exclamation) intonation and a sentence boundary it can pause
+on. `.` SHALL be used when a boundary is known but the exact mark was not
+recorded. The stored per-token text SHALL remain terminator-free so the merge
+can match tokens to aligned words.
 
 #### Scenario: Terminator re-attached for the voice
 
@@ -82,8 +83,8 @@ forced alignment so alignment is not disturbed by punctuation.
 - **THEN** the synthesized chunk text carries the exact terminator (not a generic
   period) so the voice uses the matching intonation
 
-#### Scenario: Alignment text stays terminator-free
+#### Scenario: Token text stays terminator-free
 
-- **WHEN** a chunk is force-aligned against its audio
-- **THEN** the transcript used for alignment contains no sentence terminators
-  appended by this step
+- **WHEN** the merge matches aligned words back to the chunk's tokens
+- **THEN** the token text it matches on carries no sentence terminator, so
+  punctuation cannot perturb the fuzzy match
