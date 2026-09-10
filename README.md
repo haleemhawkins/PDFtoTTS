@@ -1,11 +1,49 @@
 # PDFtoTTS
 
-Self-hosted PDF/EPUB text-to-speech reader with synchronized word highlighting.
-Upload a document, hear it read aloud by [Kokoro](https://github.com/hexgrad/kokoro),
-and watch the spoken word highlight in the rendered page in real time — word
-timings come from [WhisperX](https://github.com/m-bain/whisperX) forced
-alignment, not synthesis estimates. Both TTS and alignment run on the GPU, so a
-full document synthesizes in seconds and audio starts in well under a second.
+Upload a PDF or EPUB, hear it read aloud, and watch the spoken word highlight in
+the page as it's spoken. Self-hosted, runs entirely on your own GPU.
+
+<!-- Record a 20-30s screen capture of a page reading with the highlight tracking
+     the voice, save it as docs/demo.gif, and swap this comment for:
+     ![PDFtoTTS reading a PDF with the spoken word highlighted](docs/demo.gif) -->
+
+## Why this is harder than it looks
+
+Most TTS readers estimate word timings from the synthesizer — how long *should*
+this word take — and the highlight drifts a few words off within a paragraph.
+PDFtoTTS doesn't estimate. It synthesizes the audio first, then force-aligns the
+known transcript against that audio with WhisperX and wav2vec2, so the timings
+come from the sound that actually got produced.
+
+That leaves three problems worth solving:
+
+- **The spoken text isn't the printed text.** "1999" is read as three words and
+  "Dr." as one; the printed page has running headers and page numbers a person
+  would skip. So every normalized token carries the range of source words it came
+  from, and [`ChunkMerger`](src/PDFtoTTS.Orchestration/ChunkMerger.cs) projects
+  alignment timings back onto the original words — matching by LCS over fuzzy-equal
+  tokens, interpolating anything unmatched rather than dropping it.
+- **Audio has to start in under a second.** A full document can be hundreds of
+  chunks. The pipeline synthesizes the first chunk small and alone for fast
+  time-to-first-audio, then opens to bounded parallelism, streaming each chunk to
+  the browser over SignalR as it finishes while preserving document order.
+- **Scanned PDFs have no text at all.** Image-only PDFs go through a Surya GPU OCR
+  pass that returns words already positioned in PDF user space, falling back to
+  ocrmypdf when the GPU worker isn't there.
+
+Built and tuned for an AMD RX 7800 XT on ROCm.
+
+## Try it
+
+```bash
+docker compose up --build
+```
+
+Then open <http://localhost:5173>. First boot downloads the models and warms the
+GPU kernels, so give it a few minutes; later boots are fast.
+
+No GPU? `USE_MOCK_WORKERS=true` swaps both workers for in-process fakes and the
+whole pipeline still runs end to end.
 
 ## Architecture
 
@@ -15,12 +53,14 @@ Browser (React, PDF.js/epub.js, SignalR)
 PDFtoTTS.Api (.NET 10 Minimal API + ReaderHub)
    │  gRPC (paths over the wire, not bytes)
    ├── kokoro-tts      (Python, PyTorch/torch-rocm)  text → WAV on /data
-   └── whisperx-align  (Python, torch-rocm)          WAV + transcript → word timings
+   ├── whisperx-align  (Python, torch-rocm)          WAV + transcript → word timings
+   └── surya-ocr       (Python, torch-rocm)          scanned pages → positioned words
          shared volume /data ── audio + originals
 ```
 
-The full specification lives in OpenSpec:
-`openspec/changes/add-tts-reader/` (`design.md` is the exhaustive technical doc).
+Audio never crosses gRPC as bytes — workers write to a shared volume and return a
+path. Full specification lives in OpenSpec under `openspec/`; the capability specs
+in `openspec/specs/` describe what the system does today.
 
 ## Prerequisites
 
@@ -31,11 +71,7 @@ The full specification lives in OpenSpec:
 The workers spoof the RX 7800 XT as the supported gfx1100 via
 `HSA_OVERRIDE_GFX_VERSION=11.0.0` (already set in `docker-compose.yml`).
 
-## Run the stack
-
-```bash
-docker compose up --build
-```
+## First boot
 
 On first start each worker downloads its model from Hugging Face into the
 `modelcache` volume (Kokoro's TTS weights, WhisperX's wav2vec2) and warms up GPU
@@ -45,7 +81,7 @@ boots are fast. Workers report healthy once their models are resident and warmed
 boot can take a few minutes (`start_period` is generous).
 
 - API: <http://localhost:8080>  (`GET /healthz`, `GET /api/voices`)
-- Frontend: <http://localhost:5173> (added in group 6)
+- Frontend: <http://localhost:5173>
 
 ### Quick API smoke test
 
@@ -63,7 +99,7 @@ curl http://localhost:8080/api/sessions/<sessionId>/chunks
 
 ```bash
 # .NET: build + test the whole solution
-DOTNET_SYSTEM_NET_DISABLEIPV6=1 dotnet test        # 102 tests
+DOTNET_SYSTEM_NET_DISABLEIPV6=1 dotnet test        # 104 tests
 
 # Python workers: generate stubs, then run the (GPU-free) unit tests
 ./workers/gen_proto.sh
@@ -96,5 +132,6 @@ cd frontend && npx playwright install chromium && npm run test:e2e
 | `src/PDFtoTTS.Api` | REST + SignalR host, gRPC client adapters |
 | `workers/kokoro-tts` | Kokoro TTS gRPC worker |
 | `workers/whisperx-align` | WhisperX alignment gRPC worker |
+| `workers/surya-ocr` | Surya GPU OCR worker for scanned PDFs |
 | `workers/shared` | code shared by the workers (copied to `/app/shared` in each image) |
 | `tests/` | .NET unit + integration tests |
